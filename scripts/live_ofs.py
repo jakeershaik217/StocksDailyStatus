@@ -1,26 +1,35 @@
 from __future__ import annotations
 
+import json
 import os
-import sys
 from datetime import datetime, timezone
 
-from ofs.engine import BidLevel, estimate_cutoff
+from ofs.engine import BidLevel, calculate_non_retail_cutoff
 from ofs.sources import fetch_bse_levels, fetch_nse_market_by_price, retry
 
 
 def main() -> int:
     symbol = os.environ["OFS_SYMBOL"].upper().strip()
     offered = int(os.environ["OFS_OFFERED"])
-    category = os.getenv("OFS_CATEGORY", "GENERAL").upper()
+    category = os.getenv("OFS_CATEGORY", "NON_RETAIL").upper()
     nse_url = os.getenv("NSE_MBP_URL", "").strip()
     bse_url = os.getenv("BSE_DEPTH_URL", "").strip()
+    final_json = os.getenv("OFS_FINAL_BID_JSON", "").strip()
 
     levels: list[BidLevel] = []
     errors: list[str] = []
 
+    if final_json:
+        try:
+            rows = json.loads(final_json)
+            for row in rows:
+                levels.append(BidLevel(price=row["price"], quantity=int(row["quantity"]), exchange=str(row.get("exchange", "CONSOLIDATED")).upper(), category=category))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"FINAL_BID_JSON: {exc}")
+
     if nse_url:
         try:
-            levels.extend(retry(lambda: fetch_nse_market_by_price(symbol, category=category)))
+            levels.extend(retry(lambda: fetch_nse_market_by_price(symbol, endpoint_url=nse_url, category=category)))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"NSE: {exc}")
 
@@ -30,28 +39,32 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"BSE: {exc}")
 
-    print(f"OFS Cutoff Analyzer | {symbol} | {category} | {datetime.now(timezone.utc).isoformat()}")
-    print(f"Visible bid levels: {len(levels)}")
-    for level in sorted(levels, key=lambda x: x.price, reverse=True):
-        print(f"{level.exchange:3} {level.category:8} ₹{level.price} {level.quantity:,}")
+    print(f"OFS FINAL CUTOFF ANALYZER | {symbol} | {category} | {datetime.now(timezone.utc).isoformat()}")
+    print("Method: T-day final valid bids, combined across NSE/BSE, price priority")
+    print(f"Bid levels received: {len(levels)}")
 
     if not levels:
-        print("ERROR: No bid levels were retrieved. Configure exchange endpoints/credentials.")
+        print("ERROR: No final bid levels were retrieved.")
         for err in errors:
             print(f"  {err}")
         return 1
 
-    result = estimate_cutoff(levels, offered, category=category)
-    print(f"Offered quantity: {result.offered_quantity:,}")
-    print(f"Cumulative at estimated cutoff: {result.cumulative_quantity_at_cutoff:,}")
-    print(f"Saturation ratio: {result.saturation_ratio}")
+    for level in sorted(levels, key=lambda x: x.price, reverse=True):
+        print(f"{level.exchange:12} ₹{level.price} {level.quantity:,}")
+
+    result = calculate_non_retail_cutoff(levels, offered, category=category)
+    print(f"Final offer quantity: {result.offered_quantity:,}")
+    print(f"Demand above cutoff: {result.cumulative_quantity_above_cutoff:,}")
+    print(f"Demand at cutoff price: {result.quantity_at_cutoff_price:,}")
+    print(f"Quantity needed at cutoff: {result.quantity_needed_at_cutoff:,}")
 
     if result.cutoff_price is None:
-        print("CUTOFF: NOT YET OBSERVABLE — visible demand is below supply.")
+        print("CUTOFF: NOT OBSERVABLE — final valid demand is below the final offer quantity.")
         return 2
 
-    print(f"ESTIMATED CUTOFF: ₹{result.cutoff_price}")
-    print("WORKING BID: cutoff or one valid tick above can improve price-priority, but it does not guarantee allotment.")
+    print(f"FINAL ESTIMATED NON-RETAIL CUTOFF: ₹{result.cutoff_price}")
+    print("ALLOCATION NOTE: bids above the cutoff receive priority; the cutoff level may receive only the residual quantity and can therefore be partially/proportionately allocated under the applicable OFS terms.")
+    print("WORKING BID: for a pre-close estimate, bidding at/above the estimated cutoff may improve price eligibility; it does not guarantee allotment.")
     if errors:
         print("WARNINGS:")
         for err in errors:
