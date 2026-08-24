@@ -21,27 +21,24 @@ class RawOFS:
     fetched_at: float
 
 
-def _request_json(url: str, *, headers: dict[str, str], timeout: float = 8.0) -> Any:
-    response = requests.get(url, headers=headers, timeout=timeout)
+def _request_json(url: str, *, headers: dict[str, str], params: dict[str, str] | None = None, timeout: float = 8.0) -> Any:
+    response = requests.get(url, headers=headers, params=params, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
 
 def parse_nse_market_by_price(payload: Any, *, symbol: str, category: str = "GENERAL") -> list[BidLevel]:
-    """Parse the documented NSE e-OFS market-by-price response."""
+    """Parse NSE e-OFS market-by-price rows."""
     rows = payload if isinstance(payload, list) else payload.get("data", payload.get("records", []))
     levels: list[BidLevel] = []
     for row in rows or []:
-        if row.get("price") in (None, "", 0) or row.get("quantity") in (None, "", 0):
+        if not isinstance(row, dict):
             continue
-        levels.append(
-            BidLevel(
-                price=row["price"],
-                quantity=int(row["quantity"]),
-                exchange="NSE",
-                category=category,
-            )
-        )
+        price = row.get("price")
+        quantity = row.get("quantity")
+        if price in (None, "", 0) or quantity in (None, "", 0):
+            continue
+        levels.append(BidLevel(price=price, quantity=int(quantity), exchange="NSE", category=category))
     return levels
 
 
@@ -55,12 +52,13 @@ def fetch_nse_market_by_price(
     url = f"{base_url.rstrip('/')}/query/marketByPrice"
     payload = _request_json(
         url,
-        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        params={"symbol": symbol, "series": series},
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/",
+        },
     )
-    # The deployed endpoint may require query parameters. Keep the public parser
-    # separate so a broker/member-authenticated endpoint can be injected later.
-    if isinstance(payload, dict) and payload.get("symbol") not in (None, symbol):
-        return []
     return parse_nse_market_by_price(payload, symbol=symbol, category=category)
 
 
