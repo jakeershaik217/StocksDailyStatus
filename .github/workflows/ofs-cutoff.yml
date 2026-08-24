@@ -1,0 +1,50 @@
+name: OFS Cutoff Analyzer
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "NSE symbol"
+        required: true
+        type: string
+      offered_quantity:
+        description: "Shares offered in the target category"
+        required: true
+        type: number
+      category:
+        description: "OFS category"
+        required: true
+        default: "GENERAL"
+        type: choice
+        options:
+          - GENERAL
+          - RETAIL
+          - EMPLOYEE
+      nse_mbp_url:
+        description: "Optional authenticated/public NSE e-OFS market-by-price endpoint"
+        required: false
+        type: string
+      bse_depth_url:
+        description: "Optional BSE OFS depth endpoint"
+        required: false
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - name: Run live OFS analyzer
+        env:
+          OFS_SYMBOL: ${{ inputs.symbol }}
+          OFS_OFFERED: ${{ inputs.offered_quantity }}
+          OFS_CATEGORY: ${{ inputs.category }}
+          NSE_MBP_URL: ${{ inputs.nse_mbp_url }}
+          BSE_DEPTH_URL: ${{ inputs.bse_depth_url }}
+        run: python scripts/live_ofs.py
