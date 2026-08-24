@@ -1,47 +1,67 @@
 # Live OFS Cutoff Analyzer
 
-This module estimates the live OFS cutoff by combining visible bid levels and sorting demand from the highest bid price downward until the category's offered quantity is saturated.
+This module is designed for the **T-day final non-retail/HNI cutoff**, while still supporting intraday estimates.
 
-## Important market-structure notes
+## Correct final-day methodology
 
-- NSE defines the OFS cut-off price as the lowest price at which an investor is allocated shares.
-- NSE says the indicative price is a VWAP of valid/confirmed bids and that demand by price point is displayed during the OFS.
-- BSE says its OFS page displays BSE bid price/quantity in real time and that indicative price is consolidated from both exchanges.
-- The estimated cutoff from a live order book is not a guaranteed allotment price. The final price/quantity is determined after the offer closes and allocation methodology is applied.
+NSE defines OFS cut-off price as the lowest price at which an investor is allocated shares. The exchange also states that, after OFS closure, allocation follows the offer's stated methodology such as proportionate basis or price-time priority. citeturn438652search0
 
-## Local run
+For the common non-retail **price-priority / multiple-clearing-price** methodology, the engine:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pytest -q
+1. Collects all valid T-day non-retail bids from NSE and BSE.
+2. Combines NSE + BSE quantities at the same price.
+3. Sorts price levels from highest to lowest.
+4. Uses the **final quantity actually available for non-retail allocation**. This must include any exercised oversubscription option disclosed after market close.
+5. Walks down the price ladder until cumulative demand reaches that final quantity.
+6. Identifies that price as the estimated/final non-retail cutoff.
+7. Separately reports the residual quantity available at the cutoff price, because the cutoff level can receive only a partial allocation.
+
+The seller's notice can also specify allocation methodology, and recent NSE OFS notices state that non-retail allocation is at the Cut-Off Price or higher as per bids. citeturn438652search12
+
+### Example
+
+```text
+₹520   8,00,000
+₹519   7,00,000
+₹518   9,00,000
+₹517   6,00,000
+₹516   12,00,000
+
+Final non-retail shares available = 30,00,000
+
+Demand > ₹517 = 30,00,000
+Therefore cutoff = ₹517
+
+At ₹517 itself:
+required = 6,00,000
+requested at ₹517 = 6,00,000
 ```
 
-Example calculation:
+If the cumulative quantity above the cutoff is 28,00,000 and the cutoff level contains 6,00,000 shares, only 2,00,000 of that cutoff level is needed. The remaining requests at ₹517 are subject to the applicable allocation rule rather than being treated as fully allotted.
 
-```bash
-python -m ofs.cli \
-  --offered 1000 \
-  --category GENERAL \
-  --bid NSE:GENERAL:105:200 \
-  --bid BSE:GENERAL:104:300 \
-  --bid NSE:GENERAL:103:600
-```
+## Important NSE/BSE distinction
+
+The cutoff is a **category-level clearing result**, not an exchange-by-exchange cutoff. Where an OFS is conducted through both NSE and BSE, the engine must use the valid bids considered across the exchanges as specified by the offer terms. NSE's current OFS page provides separate General and Retail reporting, while BSE's operating guidelines describe cross-exchange/category treatment. citeturn438652search1turn123119search16
+
+The exchange website's intraday indicative price is not the final cutoff. Do not use VWAP/indicative price as a substitute for the cutoff calculation.
 
 ## GitHub Actions
 
-Go to **Actions → OFS Cutoff Analyzer → Run workflow**, enter the symbol, offered quantity, and category.
+Go to **Actions → OFS Cutoff Analyzer → Run workflow**. The workflow now asks for:
 
-For a production deployment, configure the exchange endpoint/credential layer appropriate to your member/broker access. NSE's e-OFS protocol documents a Market By Price endpoint for authenticated member connectivity; a public website scrape should not be treated as an equivalent guaranteed feed.
+- NSE symbol
+- Final non-retail offer quantity
+- Category (`NON_RETAIL`, `GENERAL`, or `HNI`)
+- NSE market-by-price endpoint
+- BSE OFS depth endpoint
+- Optional final consolidated bid JSON fallback
 
-## Recommended output
+The **final offer quantity** must reflect the quantity actually available to non-retail investors after any oversubscription option is exercised. Recent OFS notices explicitly state that a seller may exercise an oversubscription option and that final allocation is then based on the resulting offer size. citeturn438652search12
 
-The live workflow should show:
+## Pre-close use
 
-1. Highest-to-lowest bid ladder from NSE and BSE.
-2. Combined demand at each price.
-3. Cumulative quantity.
-4. Estimated saturation/cutoff price.
-5. A conservative working-bid suggestion based on the tick size.
-6. A warning when visible demand is below supply or when only one exchange is available.
+Before the OFS closes, the same engine can be run against the latest NSE/BSE book to produce a moving cutoff estimate. That number is only an estimate because bids can change until the window closes.
+
+## Safety / accuracy
+
+A public-web scrape is not guaranteed to be a complete authoritative trading feed. NSE documents e-OFS API access for members and publishes market/OFS reporting separately. The analyzer therefore reports missing-source warnings rather than fabricating a cutoff when one or both feeds are unavailable. citeturn438652search0turn123119search1
