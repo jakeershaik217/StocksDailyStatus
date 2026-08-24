@@ -21,11 +21,11 @@ on:
           - RETAIL
           - EMPLOYEE
       nse_mbp_url:
-        description: "Optional authenticated/public NSE e-OFS market-by-price endpoint"
+        description: "NSE e-OFS Market By Price endpoint"
         required: false
         type: string
       bse_depth_url:
-        description: "Optional BSE OFS depth endpoint"
+        description: "BSE OFS depth endpoint"
         required: false
         type: string
 
