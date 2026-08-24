@@ -101,8 +101,9 @@ def calculate_non_retail_cutoff(
         cumulative_above = cumulative
 
     allocated_at_cutoff = qty_needed if cutoff is not None else 0
-    cumulative_at_cutoff = cumulative + allocated_at_cutoff
-    ratio = Decimal(cumulative_at_cutoff) / Decimal(final_offer_quantity)
+    total_demand = sum(price_qty.values())
+    # Total valid demand vs offered quantity: >1 means oversubscribed.
+    ratio = Decimal(total_demand) / Decimal(final_offer_quantity)
 
     return CutoffEstimate(
         category=category,
