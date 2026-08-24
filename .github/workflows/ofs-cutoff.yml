@@ -22,11 +22,11 @@ on:
           - HNI
       nse_mbp_url:
         description: "NSE e-OFS Market By Price endpoint"
-        required: false
+        required: true
         type: string
       bse_depth_url:
         description: "BSE OFS depth endpoint"
-        required: false
+        required: true
         type: string
       bid_snapshot_json:
         description: "Optional final T-day consolidated bid JSON if exchange endpoints are unavailable"
@@ -46,7 +46,6 @@ jobs:
       - run: pytest -q
       - name: Run T-day final cutoff analyzer
         env:
-          PYTHONPATH: ${{ github.workspace }}
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_OFFERED: ${{ inputs.final_offer_quantity }}
           OFS_CATEGORY: ${{ inputs.category }}

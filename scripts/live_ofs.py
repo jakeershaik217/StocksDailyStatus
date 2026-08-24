@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ofs.engine import BidLevel, calculate_non_retail_cutoff, _dec, _int
 from ofs.sources import fetch_bse_levels, fetch_nse_market_by_price, retry
