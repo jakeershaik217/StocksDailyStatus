@@ -7,25 +7,29 @@ on:
         description: "NSE symbol"
         required: true
         type: string
-      offered_quantity:
-        description: "Shares offered in the target category"
+      final_offer_quantity:
+        description: "Final T-day non-retail offer quantity, including exercised oversubscription if applicable"
         required: true
         type: number
       category:
         description: "OFS category"
         required: true
-        default: "GENERAL"
+        default: "NON_RETAIL"
         type: choice
         options:
+          - NON_RETAIL
           - GENERAL
-          - RETAIL
-          - EMPLOYEE
+          - HNI
       nse_mbp_url:
         description: "NSE e-OFS Market By Price endpoint"
-        required: false
+        required: true
         type: string
       bse_depth_url:
         description: "BSE OFS depth endpoint"
+        required: true
+        type: string
+      bid_snapshot_json:
+        description: "Optional final T-day consolidated bid JSON if exchange endpoints are unavailable"
         required: false
         type: string
 
@@ -40,11 +44,12 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: pytest -q
-      - name: Run live OFS analyzer
+      - name: Run T-day final cutoff analyzer
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
-          OFS_OFFERED: ${{ inputs.offered_quantity }}
+          OFS_OFFERED: ${{ inputs.final_offer_quantity }}
           OFS_CATEGORY: ${{ inputs.category }}
           NSE_MBP_URL: ${{ inputs.nse_mbp_url }}
           BSE_DEPTH_URL: ${{ inputs.bse_depth_url }}
+          OFS_FINAL_BID_JSON: ${{ inputs.bid_snapshot_json }}
         run: python scripts/live_ofs.py
