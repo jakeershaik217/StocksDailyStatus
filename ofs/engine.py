@@ -17,7 +17,9 @@ class BidLevel:
 class CutoffEstimate:
     category: str
     offered_quantity: int
-    cumulative_quantity_at_cutoff: int
+    cumulative_quantity_above_cutoff: int
+    quantity_at_cutoff_price: int
+    quantity_needed_at_cutoff: int
     cutoff_price: Decimal | None
     saturation_ratio: Decimal
     methodology: str
@@ -36,44 +38,74 @@ def _dec(value: object) -> Decimal:
         raise ValueError(f"Invalid price: {value!r}") from exc
 
 
+def calculate_non_retail_cutoff(
+    bids: Iterable[BidLevel],
+    final_offer_quantity: int,
+    *,
+    category: str = "NON_RETAIL",
+) -> CutoffEstimate:
+    """Calculate the T-day OFS non-retail cutoff from all valid bids.
+
+    Cutoff is the lowest price at which an investor is allocated shares. For
+    price-priority/multiple-clearing-price OFS, bids are ordered high-to-low and
+    the cutoff is the first price level where cumulative valid demand reaches
+    the final quantity being allocated.
+
+    At the cutoff level, only the quantity still available is allocated. The
+    engine records that partial-fill quantity rather than implying every bid at
+    the cutoff receives its full requested quantity.
+    """
+    if final_offer_quantity <= 0:
+        raise ValueError("final_offer_quantity must be positive")
+
+    normalized = [
+        BidLevel(_dec(b.price), int(b.quantity), b.exchange, b.category)
+        for b in bids
+        if int(b.quantity) > 0 and b.price is not None
+    ]
+
+    # Aggregate the same price across NSE/BSE before finding the clearing level.
+    price_qty: dict[Decimal, int] = {}
+    for level in normalized:
+        price_qty[level.price] = price_qty.get(level.price, 0) + level.quantity
+
+    cumulative = 0
+    cumulative_above = 0
+    cutoff: Decimal | None = None
+    qty_at_cutoff = 0
+    qty_needed = 0
+
+    for price in sorted(price_qty, reverse=True):
+        level_qty = price_qty[price]
+        if cumulative + level_qty >= final_offer_quantity:
+            cutoff = price
+            qty_at_cutoff = level_qty
+            qty_needed = max(final_offer_quantity - cumulative, 0)
+            break
+        cumulative += level_qty
+        cumulative_above = cumulative
+
+    allocated_at_cutoff = qty_needed if cutoff is not None else 0
+    cumulative_at_cutoff = cumulative + allocated_at_cutoff
+    ratio = Decimal(cumulative_at_cutoff) / Decimal(final_offer_quantity)
+
+    return CutoffEstimate(
+        category=category,
+        offered_quantity=final_offer_quantity,
+        cumulative_quantity_above_cutoff=cumulative_above,
+        quantity_at_cutoff_price=qty_at_cutoff,
+        quantity_needed_at_cutoff=allocated_at_cutoff,
+        cutoff_price=cutoff,
+        saturation_ratio=ratio,
+        methodology="t_day_final_valid_bids_price_priority_multiple_clearing_prices",
+    )
+
+
 def estimate_cutoff(
     bids: Iterable[BidLevel],
     offered_quantity: int,
     *,
     category: str = "GENERAL",
 ) -> CutoffEstimate:
-    """Estimate the price at which cumulative demand reaches offered supply.
-
-    For a price-priority OFS, valid bids are sorted from highest to lowest price.
-    The estimated cutoff is the lowest price whose cumulative demand reaches the
-    offered quantity. If the visible book never reaches supply, the estimate is
-    unavailable and callers should not fabricate a cutoff.
-    """
-    if offered_quantity <= 0:
-        raise ValueError("offered_quantity must be positive")
-
-    normalized = [
-        BidLevel(_dec(b.price), int(b.quantity), b.exchange, b.category)
-        for b in bids
-        if int(b.quantity) > 0
-    ]
-    normalized.sort(key=lambda b: b.price, reverse=True)
-
-    cumulative = 0
-    cutoff: Decimal | None = None
-    for level in normalized:
-        cumulative += level.quantity
-        if cumulative >= offered_quantity:
-            cutoff = level.price
-            break
-
-    ratio = Decimal(cumulative) / Decimal(offered_quantity)
-    methodology = "price_priority_visible_book"
-    return CutoffEstimate(
-        category=category,
-        offered_quantity=offered_quantity,
-        cumulative_quantity_at_cutoff=cumulative,
-        cutoff_price=cutoff,
-        saturation_ratio=ratio,
-        methodology=methodology,
-    )
+    """Backward-compatible alias for the final OFS cutoff calculator."""
+    return calculate_non_retail_cutoff(bids, offered_quantity, category=category)
