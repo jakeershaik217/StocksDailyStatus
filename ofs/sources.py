@@ -27,15 +27,14 @@ def _request_json(url: str, *, headers: dict[str, str], params: dict[str, str] |
     return response.json()
 
 
-def parse_nse_market_by_price(payload: Any, *, symbol: str, category: str = "GENERAL") -> list[BidLevel]:
-    """Parse NSE e-OFS market-by-price rows."""
+def parse_nse_market_by_price(payload: Any, *, symbol: str, category: str = "NON_RETAIL") -> list[BidLevel]:
     rows = payload if isinstance(payload, list) else payload.get("data", payload.get("records", []))
     levels: list[BidLevel] = []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        price = row.get("price")
-        quantity = row.get("quantity")
+        price = row.get("price", row.get("Price"))
+        quantity = row.get("quantity", row.get("Quantity"))
         if price in (None, "", 0) or quantity in (None, "", 0):
             continue
         levels.append(BidLevel(price=price, quantity=int(quantity), exchange="NSE", category=category))
@@ -45,14 +44,12 @@ def parse_nse_market_by_price(payload: Any, *, symbol: str, category: str = "GEN
 def fetch_nse_market_by_price(
     symbol: str,
     *,
-    series: str = "IS",
-    base_url: str = "https://eofs.nseindia.com/api",
-    category: str = "GENERAL",
+    endpoint_url: str,
+    category: str = "NON_RETAIL",
 ) -> list[BidLevel]:
-    url = f"{base_url.rstrip('/')}/query/marketByPrice"
     payload = _request_json(
-        url,
-        params={"symbol": symbol, "series": series},
+        endpoint_url,
+        params={"symbol": symbol},
         headers={
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json",
@@ -62,8 +59,7 @@ def fetch_nse_market_by_price(
     return parse_nse_market_by_price(payload, symbol=symbol, category=category)
 
 
-def parse_generic_bse_levels(payload: Any, *, category: str = "GENERAL") -> list[BidLevel]:
-    """Best-effort parser for BSE's published OFS depth variants."""
+def parse_generic_bse_levels(payload: Any, *, category: str = "NON_RETAIL") -> list[BidLevel]:
     rows: list[dict[str, Any]] = []
     if isinstance(payload, list):
         rows = [r for r in payload if isinstance(r, dict)]
@@ -84,7 +80,7 @@ def parse_generic_bse_levels(payload: Any, *, category: str = "GENERAL") -> list
     return levels
 
 
-def fetch_bse_levels(url: str, *, category: str = "GENERAL") -> list[BidLevel]:
+def fetch_bse_levels(url: str, *, category: str = "NON_RETAIL") -> list[BidLevel]:
     payload = _request_json(
         url,
         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*"},
@@ -97,7 +93,7 @@ def retry(fn: Callable[[], Any], *, attempts: int = 3, delay: float = 0.8) -> An
     for attempt in range(attempts):
         try:
             return fn()
-        except Exception as exc:  # noqa: BLE001 - CLI should retry transient exchange failures
+        except Exception as exc:  # noqa: BLE001
             last = exc
             if attempt + 1 < attempts:
                 time.sleep(delay * (2**attempt))
