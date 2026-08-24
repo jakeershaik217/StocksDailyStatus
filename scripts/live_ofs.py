@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from ofs.engine import BidLevel, calculate_non_retail_cutoff
+from ofs.engine import BidLevel, calculate_non_retail_cutoff, _dec, _int
 from ofs.sources import fetch_bse_levels, fetch_nse_market_by_price, retry
 
 
@@ -23,7 +23,7 @@ def main() -> int:
         try:
             rows = json.loads(final_json)
             for row in rows:
-                levels.append(BidLevel(price=row["price"], quantity=int(row["quantity"]), exchange=str(row.get("exchange", "CONSOLIDATED")).upper(), category=category))
+                levels.append(BidLevel(price=_dec(row["price"]), quantity=_int(row["quantity"]), exchange=str(row.get("exchange", "CONSOLIDATED")).upper(), category=category))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"FINAL_BID_JSON: {exc}")
 
@@ -49,7 +49,7 @@ def main() -> int:
             print(f"  {err}")
         return 1
 
-    for level in sorted(levels, key=lambda x: x.price, reverse=True):
+    for level in sorted(levels, key=lambda x: _dec(x.price), reverse=True):
         print(f"{level.exchange:12} ₹{level.price} {level.quantity:,}")
 
     result = calculate_non_retail_cutoff(levels, offered, category=category)
@@ -62,6 +62,8 @@ def main() -> int:
         print("CUTOFF: NOT OBSERVABLE — final valid demand is below the final offer quantity.")
         return 2
 
+    print(f"Demand at/above cutoff: {result.cumulative_quantity_at_cutoff:,}")
+    print(f"Saturation ratio: {result.saturation_ratio:.4f}")
     print(f"FINAL ESTIMATED NON-RETAIL CUTOFF: ₹{result.cutoff_price}")
     print("ALLOCATION NOTE: bids above the cutoff receive priority; the cutoff level may receive only the residual quantity and can therefore be partially/proportionately allocated under the applicable OFS terms.")
     print("WORKING BID: for a pre-close estimate, bidding at/above the estimated cutoff may improve price eligibility; it does not guarantee allotment.")

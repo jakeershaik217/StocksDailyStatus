@@ -24,11 +24,26 @@ class CutoffEstimate:
     saturation_ratio: Decimal
     methodology: str
 
+    @property
+    def cumulative_quantity_at_cutoff(self) -> int:
+        """Total demand at and above the cutoff price level (full cutoff-level quantity)."""
+        return self.cumulative_quantity_above_cutoff + self.quantity_at_cutoff_price
+
     def to_dict(self) -> dict:
         data = asdict(self)
+        data["cumulative_quantity_at_cutoff"] = self.cumulative_quantity_at_cutoff
         data["cutoff_price"] = str(data["cutoff_price"]) if data["cutoff_price"] is not None else None
         data["saturation_ratio"] = str(data["saturation_ratio"])
         return data
+
+
+def _int(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    try:
+        return int(Decimal(str(value).replace(",", "").strip()))
+    except (InvalidOperation, AttributeError) as exc:
+        raise ValueError(f"Invalid quantity: {value!r}") from exc
 
 
 def _dec(value: object) -> Decimal:
@@ -59,9 +74,9 @@ def calculate_non_retail_cutoff(
         raise ValueError("final_offer_quantity must be positive")
 
     normalized = [
-        BidLevel(_dec(b.price), int(b.quantity), b.exchange, b.category)
+        BidLevel(_dec(b.price), _int(b.quantity), b.exchange, b.category)
         for b in bids
-        if int(b.quantity) > 0 and b.price is not None
+        if b.price is not None and _int(b.quantity) > 0
     ]
 
     # Aggregate the same price across NSE/BSE before finding the clearing level.
