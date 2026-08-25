@@ -57,7 +57,7 @@ jobs:
           with sync_playwright() as playwright:
               browser = playwright.chromium.launch(
                   headless=True,
-                  args=["--no-sandbox", "--disable-dev-shm-usage"],
+                  args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-http2"],
               )
               context = browser.new_context(
                   viewport={"width": 1920, "height": 1080},
@@ -69,9 +69,21 @@ jobs:
                   locale="en-IN",
               )
               page = context.new_page()
-              page.goto("https://www.nseindia.com", wait_until="domcontentloaded", timeout=60000)
+
+              def navigate(target: str) -> None:
+                  last_error = None
+                  for attempt in range(4):
+                      try:
+                          page.goto(target, wait_until="domcontentloaded", timeout=60000)
+                          return
+                      except Exception as error:
+                          last_error = error
+                          page.wait_for_timeout(5000 * (attempt + 1))
+                  raise RuntimeError(f"NSE navigation failed after retries: {last_error}")
+
+              navigate("https://www.nseindia.com/")
               page.wait_for_timeout(4000)
-              page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+              navigate(URL)
 
               try:
                   page.get_by_text("General Category", exact=True).click(timeout=15000)
