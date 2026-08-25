@@ -2,6 +2,11 @@
 
 Personal stock-status tracking project.
 
-## Modernization baseline
+## OFS cutoff analyzer
 
-The repository is currently an empty project shell. Before implementation, define the market-data source, update schedule, portfolio/watchlist model, error handling, and test strategy. Secrets and API credentials must never be committed.
+The repository includes a fail-closed live non-retail OFS cutoff workflow. It
+combines exact-price NSE and BSE bidding ladders and publishes a marginal price
+only after cross-exchange reconciliation.
+
+See [README_OFS.md](README_OFS.md) for workflow inputs, methodology, and result
+interpretation.

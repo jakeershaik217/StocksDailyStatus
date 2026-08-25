@@ -1,0 +1,45 @@
+{
+  "issue": {
+    "companyName": "Smoke Test Limited",
+    "issueInfo": {
+      "heading": "Smoke Test Limited",
+      "dataList": [
+        {"title": "Bidding session Date (For IS series)", "value": "01-Jan-2020"},
+        {"title": "Tick Size", "value": "Re. 0.05"},
+        {"title": "Floor Price", "value": "Rs.100"},
+        {"title": "Allocation Methodology", "value": "Price priority basis"},
+        {"title": "Stock exchanges where the Orders shall be placed ", "value": "National Stock Exchange of India Limited and BSE Limited"}
+      ]
+    }
+  },
+  "summary": {
+    "data": [
+      {
+        "symbol": "SMOKE",
+        "series": "IS",
+        "company": "Smoke Test Limited",
+        "offerDate": "01-Jan-2020",
+        "status": "Past",
+        "totissueSize": "1000",
+        "gsIssueSize": "-",
+        "totQty": "1100",
+        "cumu_100pcQty": "700",
+        "cumu_0pcQty": "400",
+        "floorPrice": "100",
+        "indicative_Price": "103",
+        "ltp": "110"
+      }
+    ],
+    "timestamp": "01-Jan-2020 15:30:00"
+  },
+  "nse_ladder": [
+    {"pri": "103", "totQty": "300", "cumTQty": "500", "conQty": "300", "uCQty": "0", "sym": "SMOKE", "dat": "01-Jan-2020 15:30:00 IST"},
+    {"pri": "105", "totQty": "200", "cumTQty": "200", "conQty": "200", "uCQty": "0", "sym": "SMOKE", "dat": "01-Jan-2020 15:30:00 IST"}
+  ],
+  "bse_ladder": {
+    "Table": [
+      {"OE_PRICE": "104", "TOTAL_QTY": "400", "CONFIRMEDQTY": "400", "UNC_QTY": "0"},
+      {"OE_PRICE": "102", "TOTAL_QTY": "200", "CONFIRMEDQTY": "200", "UNC_QTY": "0"}
+    ]
+  }
+}

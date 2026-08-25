@@ -20,64 +20,71 @@ on:
   workflow_dispatch:
     inputs:
       symbol:
-        description: "NSE symbol"
+        description: "NSE OFS symbol"
         required: true
+        default: "HINDCOPPER"
+        type: string
+      bse_scrip_code:
+        description: "BSE numeric scrip code (HINDCOPPER: 513599)"
+        required: true
+        default: "513599"
+        type: string
+      offer_date:
+        description: "Non-retail date as DD-Mon-YYYY; blank lets NSE issue details supply it"
+        required: false
+        default: "25-Aug-2026"
+        type: string
+      series:
+        description: "NSE non-retail OFS series"
+        required: true
+        default: "IS"
         type: string
       final_offer_quantity:
-        description: "Final T-day non-retail offer quantity, including exercised oversubscription if applicable"
-        required: true
-        type: number
-      category:
-        description: "OFS category"
-        required: true
-        default: "NON_RETAIL"
-        type: choice
-        options:
-          - NON_RETAIL
-          - GENERAL
-          - HNI
-      nse_mbp_url:
-        description: "NSE e-OFS Market By Price endpoint"
-        required: true
-        type: string
-      bse_depth_url:
-        description: "BSE OFS depth endpoint"
-        required: true
-        type: string
-      bid_snapshot_json:
-        description: "Optional final T-day consolidated bid JSON if exchange endpoints are unavailable"
+        description: "Optional final non-retail quantity override after green-shoe exercise"
         required: false
         type: string
+
+permissions:
+  contents: read
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python -m pytest -q
-      - name: Smoke-test cutoff analyzer
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run unit tests
+        run: python -m pytest -q
+      - name: Smoke-test the complete reporting path
         if: github.event_name != 'workflow_dispatch'
         env:
           OFS_SYMBOL: SMOKE
-          OFS_OFFERED: "2000"
-          OFS_CATEGORY: NON_RETAIL
-          NSE_MBP_URL: ""
-          BSE_DEPTH_URL: ""
-          OFS_FINAL_BID_JSON: >-
-            [{"price":"105.50","quantity":"1,500","exchange":"NSE"},{"price":"104","quantity":"700","exchange":"BSE"}]
+          OFS_SNAPSHOT_FILE: tests/fixtures/ofs_smoke.json
         run: python scripts/live_ofs.py
-      - name: Run T-day final cutoff analyzer
+      - name: Fetch and analyze the live non-retail book
         if: github.event_name == 'workflow_dispatch'
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
-          OFS_OFFERED: ${{ inputs.final_offer_quantity }}
-          OFS_CATEGORY: ${{ inputs.category }}
-          NSE_MBP_URL: ${{ inputs.nse_mbp_url }}
-          BSE_DEPTH_URL: ${{ inputs.bse_depth_url }}
-          OFS_FINAL_BID_JSON: ${{ inputs.bid_snapshot_json }}
+          OFS_SERIES: ${{ inputs.series }}
+          OFS_CATEGORY: NON_RETAIL
+          OFS_OFFER_DATE: ${{ inputs.offer_date }}
+          BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
+          OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_offer_quantity }}
+          OFS_MAX_LIVE_AGE_MINUTES: "15"
+          OFS_MAX_SOURCE_SKEW_MINUTES: "10"
         run: python scripts/live_ofs.py
+      - name: Upload evidence and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofs-cutoff-${{ github.run_number }}
+          path: |
+            ofs-report.md
+            ofs-live-snapshot.json
+          if-no-files-found: warn
