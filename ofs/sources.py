@@ -6,7 +6,7 @@ import time
 
 import requests
 
-from .engine import BidLevel
+from .engine import BidLevel, _dec, _int
 
 
 @dataclass(frozen=True)
@@ -35,9 +35,12 @@ def parse_nse_market_by_price(payload: Any, *, symbol: str, category: str = "NON
             continue
         price = row.get("price", row.get("Price"))
         quantity = row.get("quantity", row.get("Quantity"))
-        if price in (None, "", 0) or quantity in (None, "", 0):
+        if price in (None, "") or quantity in (None, ""):
             continue
-        levels.append(BidLevel(price=price, quantity=int(quantity), exchange="NSE", category=category))
+        price_dec, qty_int = _dec(price), _int(quantity)
+        if price_dec <= 0 or qty_int <= 0:
+            continue
+        levels.append(BidLevel(price=price_dec, quantity=qty_int, exchange="NSE", category=category))
     return levels
 
 
@@ -72,11 +75,14 @@ def parse_generic_bse_levels(payload: Any, *, category: str = "NON_RETAIL") -> l
                     break
     levels: list[BidLevel] = []
     for row in rows:
-        price = next((row.get(k) for k in ("price", "Price", "BIDPRICE", "BidPrice", "bidPrice")), None)
-        qty = next((row.get(k) for k in ("quantity", "Quantity", "BIDQTY", "BidQty", "bidQty")), None)
-        if price in (None, "", 0) or qty in (None, "", 0):
+        price = next((row.get(k) for k in ("price", "Price", "BIDPRICE", "BidPrice", "bidPrice") if row.get(k) is not None), None)
+        qty = next((row.get(k) for k in ("quantity", "Quantity", "BIDQTY", "BidQty", "bidQty") if row.get(k) is not None), None)
+        if price in (None, "") or qty in (None, ""):
             continue
-        levels.append(BidLevel(price=price, quantity=int(qty), exchange="BSE", category=category))
+        price_dec, qty_int = _dec(price), _int(qty)
+        if price_dec <= 0 or qty_int <= 0:
+            continue
+        levels.append(BidLevel(price=price_dec, quantity=qty_int, exchange="BSE", category=category))
     return levels
 
 
