@@ -1,0 +1,212 @@
+name: HINDCOPPER Live OFS Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/hindcopper-live.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install analyzer and browser dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Run HINDCOPPER live OFS analyzer
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from decimal import Decimal
+          from pathlib import Path
+
+          from playwright.sync_api import sync_playwright
+
+          from ofs.engine import BidLevel, calculate_non_retail_cutoff
+
+          SYMBOL = "HINDCOPPER"
+          URL = (
+              "https://www.nseindia.com/market-data/ofs-information"
+              "?symbol=HINDCOPPER&series=IS&type=Active"
+          )
+
+          def integer(value: str) -> int:
+              digits = re.sub(r"[^\d]", "", value or "")
+              return int(digits) if digits else 0
+
+          def decimal_price(value: str) -> Decimal | None:
+              cleaned = (value or "").replace(",", "").strip()
+              if not re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+                  return None
+              return Decimal(cleaned)
+
+          with sync_playwright() as playwright:
+              browser = playwright.chromium.launch(
+                  headless=True,
+                  args=["--no-sandbox", "--disable-dev-shm-usage"],
+              )
+              context = browser.new_context(
+                  viewport={"width": 1920, "height": 1080},
+                  user_agent=(
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/131.0.0.0 Safari/537.36"
+                  ),
+                  locale="en-IN",
+              )
+              page = context.new_page()
+              page.goto("https://www.nseindia.com", wait_until="domcontentloaded", timeout=60000)
+              page.wait_for_timeout(4000)
+              page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+
+              try:
+                  page.get_by_text("General Category", exact=True).click(timeout=15000)
+              except Exception:
+                  pass
+
+              try:
+                  page.locator("a[onclick*='loadOfsGeneral']").click(timeout=15000)
+              except Exception:
+                  pass
+
+              page.wait_for_function(
+                  """() => Array.from(
+                      document.querySelectorAll('#ofsGeneralTable tbody tr.accordActive')
+                  ).some(row => /Hindustan Copper/i.test(row.innerText))""",
+                  timeout=90000,
+              )
+
+              snapshot = page.evaluate(
+                  """() => {
+                      const rows = Array.from(
+                          document.querySelectorAll('#ofsGeneralTable tbody tr.accordActive')
+                      );
+                      const row = rows.find(item => /Hindustan Copper/i.test(item.innerText));
+                      if (!row) return null;
+
+                      const cells = Array.from(row.querySelectorAll(':scope > td'))
+                          .map(cell => cell.innerText.trim());
+                      const detail = row.nextElementSibling;
+                      const detailRows = detail
+                          ? Array.from(detail.querySelectorAll('table tbody tr')).map(item =>
+                              Array.from(item.querySelectorAll('td'))
+                                  .map(cell => cell.innerText.trim())
+                            )
+                          : [];
+
+                      const generalPanel = document.querySelector('#ci_general');
+                      const asOf = generalPanel
+                          ? generalPanel.querySelector('.asondate span')?.innerText.trim()
+                          : null;
+
+                      return { cells, detailRows, asOf, pageUrl: location.href };
+                  }"""
+              )
+              page.screenshot(path="hindcopper-ofs.png", full_page=True)
+              Path("hindcopper-ofs-raw.json").write_text(
+                  json.dumps(snapshot, indent=2, ensure_ascii=False),
+                  encoding="utf-8",
+              )
+              browser.close()
+
+          if not snapshot:
+              raise RuntimeError("HINDCOPPER was not found in NSE General-category OFS data")
+
+          cells = snapshot["cells"]
+          if len(cells) < 12:
+              raise RuntimeError(f"Unexpected NSE summary row: {cells!r}")
+
+          company = cells[1]
+          ltp = cells[2]
+          floor_price = cells[3]
+          indicative_price = cells[4]
+          base_offer = integer(cells[5])
+          total_offer = integer(cells[6])
+          header_total_demand = integer(cells[9])
+
+          levels: list[BidLevel] = []
+          for row in snapshot["detailRows"]:
+              if len(row) < 8:
+                  continue
+              price = decimal_price(row[0])
+              quantity = integer(row[4])
+              if price is None or quantity <= 0:
+                  continue
+              levels.append(
+                  BidLevel(
+                      price=price,
+                      quantity=quantity,
+                      exchange="NSE_PUBLIC_CONSOLIDATED",
+                      category="NON_RETAIL",
+                  )
+              )
+
+          if not levels:
+              raise RuntimeError(
+                  "NSE displayed the OFS summary but no numeric bid-price ladder was available"
+              )
+          if base_offer <= 0:
+              raise RuntimeError(f"Invalid base offer quantity in NSE row: {cells[5]!r}")
+
+          ladder_total = sum(level.quantity for level in levels)
+
+          print(f"OFS LIVE SNAPSHOT | {company} | {SYMBOL}")
+          print(f"NSE displayed as of: {snapshot.get('asOf') or 'not shown'} IST")
+          print(f"LTP: ₹{ltp}")
+          print(f"Floor price: ₹{floor_price}")
+          print(f"Indicative price: ₹{indicative_price}")
+          print(f"Base non-retail offer quantity: {base_offer:,}")
+          print(
+              "Total/green-shoe non-retail quantity: "
+              + (f"{total_offer:,}" if total_offer else "not yet shown")
+          )
+          print(f"Price levels captured: {len(levels)}")
+          print(f"Demand reconstructed from price ladder: {ladder_total:,}")
+          print(f"NSE summary total demand: {header_total_demand:,}")
+
+          def report(label: str, offered: int) -> None:
+              result = calculate_non_retail_cutoff(
+                  levels,
+                  offered,
+                  category="NON_RETAIL",
+              )
+              print(f"{label} OFFER QUANTITY: {offered:,}")
+              print(f"{label} SUBSCRIPTION: {result.saturation_ratio:.4f}x")
+              if result.cutoff_price is None:
+                  print(
+                      f"{label} CUTOFF: NOT OBSERVABLE — current demand "
+                      "has not reached this offer quantity."
+                  )
+                  return
+              print(f"{label} DEMAND ABOVE CUTOFF: {result.cumulative_quantity_above_cutoff:,}")
+              print(f"{label} DEMAND AT CUTOFF: {result.quantity_at_cutoff_price:,}")
+              print(f"{label} QUANTITY NEEDED AT CUTOFF: {result.quantity_needed_at_cutoff:,}")
+              print(f"{label} ESTIMATED CUTOFF: ₹{result.cutoff_price}")
+
+          report("BASE", base_offer)
+          if total_offer and total_offer != base_offer:
+              report("TOTAL", total_offer)
+          PY
+      - name: Upload NSE snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hindcopper-ofs-snapshot
+          path: |
+            hindcopper-ofs.png
+            hindcopper-ofs-raw.json
+          if-no-files-found: ignore
