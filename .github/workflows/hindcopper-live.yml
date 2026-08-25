@@ -1,6 +1,7 @@
 name: HINDCOPPER Live OFS Run
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -13,212 +14,184 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install analyzer and browser dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install playwright
-          python -m playwright install --with-deps chromium
+      - name: Install analyzer dependencies
+        run: pip install -r requirements.txt
       - name: Run HINDCOPPER live OFS analyzer
         run: |
           python - <<'PY'
           from __future__ import annotations
 
           import json
-          import re
+          import time
+          from datetime import datetime, timezone
           from decimal import Decimal
           from pathlib import Path
 
-          from playwright.sync_api import sync_playwright
+          import requests
 
           from ofs.engine import BidLevel, calculate_non_retail_cutoff
 
+          BASE_URL = "https://www.nseindia.com"
           SYMBOL = "HINDCOPPER"
-          URL = (
-              "https://www.nseindia.com/market-data/ofs-information"
-              "?symbol=HINDCOPPER&series=IS&type=Active"
+          SERIES = "IS"
+          OFFER_DATE = "25-Aug-2026"
+          PAGE_URL = (
+              f"{BASE_URL}/market-data/ofs-information"
+              f"?symbol={SYMBOL}&series={SERIES}&type=Active&offerDate={OFFER_DATE}"
           )
 
-          def integer(value: str) -> int:
-              digits = re.sub(r"[^\d]", "", value or "")
-              return int(digits) if digits else 0
-
-          def decimal_price(value: str) -> Decimal | None:
-              cleaned = (value or "").replace(",", "").strip()
-              if not re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
-                  return None
-              return Decimal(cleaned)
-
-          with sync_playwright() as playwright:
-              browser = playwright.chromium.launch(
-                  headless=True,
-                  args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-http2"],
-              )
-              context = browser.new_context(
-                  viewport={"width": 1920, "height": 1080},
-                  user_agent=(
+          session = requests.Session()
+          session.headers.update(
+              {
+                  "User-Agent": (
                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
                       "Chrome/131.0.0.0 Safari/537.36"
                   ),
-                  locale="en-IN",
-              )
-              page = context.new_page()
-
-              def navigate(target: str) -> None:
-                  last_error = None
-                  for attempt in range(4):
-                      try:
-                          page.goto(target, wait_until="domcontentloaded", timeout=60000)
-                          return
-                      except Exception as error:
-                          last_error = error
-                          page.wait_for_timeout(5000 * (attempt + 1))
-                  raise RuntimeError(f"NSE navigation failed after retries: {last_error}")
-
-              navigate("https://www.nseindia.com/")
-              page.wait_for_timeout(4000)
-              navigate(URL)
-
-              try:
-                  page.get_by_text("General Category", exact=True).click(timeout=15000)
-              except Exception:
-                  pass
-
-              try:
-                  page.locator("a[onclick*='loadOfsGeneral']").click(timeout=15000)
-              except Exception:
-                  pass
-
-              page.wait_for_function(
-                  """() => Array.from(
-                      document.querySelectorAll('#ofsGeneralTable tbody tr.accordActive')
-                  ).some(row => /Hindustan Copper/i.test(row.innerText))""",
-                  timeout=90000,
-              )
-
-              snapshot = page.evaluate(
-                  """() => {
-                      const rows = Array.from(
-                          document.querySelectorAll('#ofsGeneralTable tbody tr.accordActive')
-                      );
-                      const row = rows.find(item => /Hindustan Copper/i.test(item.innerText));
-                      if (!row) return null;
-
-                      const cells = Array.from(row.querySelectorAll(':scope > td'))
-                          .map(cell => cell.innerText.trim());
-                      const detail = row.nextElementSibling;
-                      const detailRows = detail
-                          ? Array.from(detail.querySelectorAll('table tbody tr')).map(item =>
-                              Array.from(item.querySelectorAll('td'))
-                                  .map(cell => cell.innerText.trim())
-                            )
-                          : [];
-
-                      const generalPanel = document.querySelector('#ci_general');
-                      const asOf = generalPanel
-                          ? generalPanel.querySelector('.asondate span')?.innerText.trim()
-                          : null;
-
-                      return { cells, detailRows, asOf, pageUrl: location.href };
-                  }"""
-              )
-              page.screenshot(path="hindcopper-ofs.png", full_page=True)
-              Path("hindcopper-ofs-raw.json").write_text(
-                  json.dumps(snapshot, indent=2, ensure_ascii=False),
-                  encoding="utf-8",
-              )
-              browser.close()
-
-          if not snapshot:
-              raise RuntimeError("HINDCOPPER was not found in NSE General-category OFS data")
-
-          cells = snapshot["cells"]
-          if len(cells) < 12:
-              raise RuntimeError(f"Unexpected NSE summary row: {cells!r}")
-
-          company = cells[1]
-          ltp = cells[2]
-          floor_price = cells[3]
-          indicative_price = cells[4]
-          base_offer = integer(cells[5])
-          total_offer = integer(cells[6])
-          header_total_demand = integer(cells[9])
-
-          levels: list[BidLevel] = []
-          for row in snapshot["detailRows"]:
-              if len(row) < 8:
-                  continue
-              price = decimal_price(row[0])
-              quantity = integer(row[4])
-              if price is None or quantity <= 0:
-                  continue
-              levels.append(
-                  BidLevel(
-                      price=price,
-                      quantity=quantity,
-                      exchange="NSE_PUBLIC_CONSOLIDATED",
-                      category="NON_RETAIL",
-                  )
-              )
-
-          if not levels:
-              raise RuntimeError(
-                  "NSE displayed the OFS summary but no numeric bid-price ladder was available"
-              )
-          if base_offer <= 0:
-              raise RuntimeError(f"Invalid base offer quantity in NSE row: {cells[5]!r}")
-
-          ladder_total = sum(level.quantity for level in levels)
-
-          print(f"OFS LIVE SNAPSHOT | {company} | {SYMBOL}")
-          print(f"NSE displayed as of: {snapshot.get('asOf') or 'not shown'} IST")
-          print(f"LTP: ₹{ltp}")
-          print(f"Floor price: ₹{floor_price}")
-          print(f"Indicative price: ₹{indicative_price}")
-          print(f"Base non-retail offer quantity: {base_offer:,}")
-          print(
-              "Total/green-shoe non-retail quantity: "
-              + (f"{total_offer:,}" if total_offer else "not yet shown")
+                  "Accept": "application/json, text/plain, */*",
+                  "Accept-Language": "en-IN,en;q=0.9",
+                  "Referer": PAGE_URL,
+              }
           )
-          print(f"Price levels captured: {len(levels)}")
-          print(f"Demand reconstructed from price ladder: {ladder_total:,}")
-          print(f"NSE summary total demand: {header_total_demand:,}")
 
-          def report(label: str, offered: int) -> None:
-              result = calculate_non_retail_cutoff(
-                  levels,
-                  offered,
+          def fetch_json(path: str, params: dict[str, str]):
+              last_error = None
+              for attempt in range(4):
+                  try:
+                      response = session.get(
+                          f"{BASE_URL}{path}",
+                          params=params,
+                          timeout=30,
+                      )
+                      response.raise_for_status()
+                      return response.json()
+                  except Exception as error:
+                      last_error = error
+                      if attempt < 3:
+                          time.sleep(3 * (attempt + 1))
+              raise RuntimeError(f"NSE API request failed for {path}: {last_error}")
+
+          issue = fetch_json(
+              "/api/ofs-detail",
+              {"symbol": SYMBOL, "series": SERIES},
+          )
+          summary_payload = fetch_json(
+              "/api/live-ofs-active-issues-ss",
+              {
+                  "index": SERIES,
+                  "symbol": SYMBOL,
+                  "offer_date": OFFER_DATE,
+              },
+          )
+          ladder = fetch_json(
+              "/api/ofs-activeissues-dd",
+              {"symbol": SYMBOL, "offerdate": OFFER_DATE},
+          )
+
+          snapshot = {
+              "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+              "page_url": PAGE_URL,
+              "issue": issue,
+              "summary": summary_payload,
+              "nse_price_ladder": ladder,
+          }
+          Path("hindcopper-ofs-raw.json").write_text(
+              json.dumps(snapshot, indent=2, ensure_ascii=False),
+              encoding="utf-8",
+          )
+
+          rows = summary_payload.get("data") or []
+          if len(rows) != 1:
+              raise RuntimeError(f"Expected one HINDCOPPER summary row, got {len(rows)}")
+          summary = rows[0]
+          if summary.get("symbol") != SYMBOL or summary.get("series") != SERIES:
+              raise RuntimeError(f"Unexpected NSE summary identity: {summary!r}")
+          if not ladder:
+              raise RuntimeError("NSE returned no HINDCOPPER non-retail price ladder")
+
+          offer_quantity = int(summary["totissueSize"])
+          total_demand = int(summary["totQty"])
+          margin_demand = int(summary["cumu_100pcQty"]) + int(summary["cumu_0pcQty"])
+          if total_demand != margin_demand:
+              raise RuntimeError(
+                  "NSE summary failed reconciliation: "
+                  f"total={total_demand}, margin buckets={margin_demand}"
+              )
+
+          levels = [
+              BidLevel(
+                  price=Decimal(str(row["pri"])),
+                  quantity=int(row["totQty"]),
+                  exchange="NSE",
                   category="NON_RETAIL",
               )
-              print(f"{label} OFFER QUANTITY: {offered:,}")
-              print(f"{label} SUBSCRIPTION: {result.saturation_ratio:.4f}x")
-              if result.cutoff_price is None:
-                  print(
-                      f"{label} CUTOFF: NOT OBSERVABLE — current demand "
-                      "has not reached this offer quantity."
-                  )
-                  return
-              print(f"{label} DEMAND ABOVE CUTOFF: {result.cumulative_quantity_above_cutoff:,}")
-              print(f"{label} DEMAND AT CUTOFF: {result.quantity_at_cutoff_price:,}")
-              print(f"{label} QUANTITY NEEDED AT CUTOFF: {result.quantity_needed_at_cutoff:,}")
-              print(f"{label} ESTIMATED CUTOFF: ₹{result.cutoff_price}")
+              for row in ladder
+              if Decimal(str(row["pri"])) >= 0 and int(row["totQty"]) > 0
+          ]
+          ladder_total = sum(level.quantity for level in levels)
+          first_cumulative = int(ladder[0]["cumTQty"])
+          if ladder_total != first_cumulative:
+              raise RuntimeError(
+                  "NSE ladder failed reconciliation: "
+                  f"sum={ladder_total}, first cumulative={first_cumulative}"
+              )
+          if ladder_total > total_demand:
+              raise RuntimeError(
+                  "NSE ladder exceeds NSE consolidated summary demand: "
+                  f"ladder={ladder_total}, summary={total_demand}"
+              )
 
-          report("BASE", base_offer)
-          if total_offer and total_offer != base_offer:
-              report("TOTAL", total_offer)
+          subscription = Decimal(total_demand) / Decimal(offer_quantity)
+          detail_time = ladder[0].get("dat", "not shown")
+
+          print(f"OFS LIVE SNAPSHOT | {issue['companyName']} | {SYMBOL}")
+          print(f"NSE summary as of: {summary_payload.get('timestamp', 'not shown')} IST")
+          print(f"NSE price ladder as of: {detail_time}")
+          print(f"Floor price: ₹{summary['floorPrice']}")
+          print(f"LTP: ₹{summary['ltp']}")
+          print(f"Indicative price: ₹{summary['indicative_Price']}")
+          print(f"Base non-retail offer quantity: {offer_quantity:,}")
+          print(f"Total/green-shoe non-retail quantity: {summary.get('gsIssueSize', '-')}")
+          print(f"Consolidated demand: {total_demand:,}")
+          print(f"100% margin demand: {int(summary['cumu_100pcQty']):,}")
+          print(f"0% margin demand: {int(summary['cumu_0pcQty']):,}")
+          print(f"NSE ladder demand: {ladder_total:,}")
+          print(f"CONSOLIDATED SUBSCRIPTION: {subscription:.4f}x")
+
+          if total_demand < offer_quantity:
+              print(
+                  "CONSOLIDATED CUTOFF: NOT OBSERVABLE — current demand "
+                  "has not reached the base non-retail offer quantity."
+              )
+          else:
+              if ladder_total != total_demand:
+                  raise RuntimeError(
+                      "Demand reached the offer, but the public price ladder is "
+                      "NSE-only and does not reconcile to consolidated demand; "
+                      "a cross-exchange cutoff cannot be estimated safely."
+                  )
+              result = calculate_non_retail_cutoff(
+                  levels,
+                  offer_quantity,
+                  category="NON_RETAIL",
+              )
+              if result.cutoff_price is None:
+                  raise RuntimeError("Cutoff was expected but the engine returned none")
+              print(f"DEMAND ABOVE CUTOFF: {result.cumulative_quantity_above_cutoff:,}")
+              print(f"DEMAND AT CUTOFF: {result.quantity_at_cutoff_price:,}")
+              print(f"QUANTITY NEEDED AT CUTOFF: {result.quantity_needed_at_cutoff:,}")
+              print(f"ESTIMATED CUTOFF: ₹{result.cutoff_price}")
           PY
       - name: Upload NSE snapshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hindcopper-ofs-snapshot
-          path: |
-            hindcopper-ofs.png
-            hindcopper-ofs-raw.json
-          if-no-files-found: ignore
+          path: hindcopper-ofs-raw.json
+          if-no-files-found: error
