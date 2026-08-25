@@ -16,6 +16,8 @@ class LiveCutoffAssessment:
     offer_quantity: int
     base_offer_quantity: int
     total_offer_quantity: int | None
+    demand_basis: str
+    decision_demand: int
     summary_total_demand: int
     nse_ladder_demand: int | None
     bse_ladder_demand: int | None
@@ -54,6 +56,10 @@ def _age_error(
     return None
 
 
+def _ladder_time(ladder: LadderSnapshot) -> datetime:
+    return ladder.as_of or ladder.fetched_at
+
+
 def assess_live_cutoff(
     summary: OFSSummary,
     nse_ladder: LadderSnapshot | None,
@@ -63,18 +69,18 @@ def assess_live_cutoff(
     tick_size: Decimal = Decimal("0.05"),
     now: datetime | None = None,
     max_live_age: timedelta = timedelta(minutes=15),
-    max_source_skew: timedelta = timedelta(minutes=10),
+    max_source_skew: timedelta = timedelta(minutes=3),
 ) -> LiveCutoffAssessment:
-    """Assess whether a live cross-exchange cutoff can be stated safely.
+    """Assess a live cross-exchange marginal OFS price without mixing timestamps.
 
-    NSE's summary total is treated as the consolidated control total. A
-    marginal cutoff is emitted only when the exact-price NSE and BSE ladders
-    add to that control total. This deliberately fails closed: a plausible
-    NSE-only price is not presented as a cross-exchange cutoff.
+    Each exchange ladder must reconcile its incremental quantities to its own
+    cumulative totals. When fresh NSE and BSE ladders are close in time, their
+    combined exact-price book is the decision source. NSE's slower summary is a
+    timestamped control; it blocks on a same-time mismatch but is only diagnostic
+    when it describes an older or newer snapshot.
     """
     now = now or datetime.now(timezone.utc)
     warnings: list[str] = []
-    errors: list[str] = []
 
     if offer_override is not None:
         if offer_override <= 0:
@@ -92,202 +98,188 @@ def assess_live_cutoff(
             "base-offer scenario, not a guaranteed final allocation cutoff."
         )
 
-    if _is_live_session(summary, now):
-        stale_summary = _age_error(
-            "NSE consolidated summary",
+    nse_total = nse_ladder.total_quantity if nse_ladder else None
+    bse_total = bse_ladder.total_quantity if bse_ladder else None
+    combined_total = (
+        nse_total + bse_total
+        if nse_total is not None and bse_total is not None
+        else None
+    )
+    reconciliation_gap = (
+        combined_total - summary.total_demand if combined_total is not None else None
+    )
+    live_session = _is_live_session(summary, now)
+
+    summary_freshness_error = (
+        _age_error(
+            "NSE published summary",
             summary.as_of,
             now=now,
             max_age=max_live_age,
         )
-        if stale_summary:
-            errors.append(stale_summary)
+        if live_session
+        else None
+    )
 
-    if errors:
+    ladder_errors: list[str] = []
+    if nse_ladder is None:
+        ladder_errors.append("NSE exact-price ladder is missing")
+    if bse_ladder is None:
+        ladder_errors.append("BSE exact-price ladder is missing")
+
+    if nse_ladder and bse_ladder:
+        for ladder in (nse_ladder, bse_ladder):
+            if ladder.symbol.upper() != summary.symbol.upper():
+                ladder_errors.append(
+                    f"{ladder.exchange} ladder symbol {ladder.symbol} does not match "
+                    f"{summary.symbol}"
+                )
+            if ladder.category.upper() != "NON_RETAIL":
+                ladder_errors.append(f"{ladder.exchange} ladder is not NON_RETAIL")
+            if live_session:
+                stale = _age_error(
+                    f"{ladder.exchange} ladder",
+                    _ladder_time(ladder),
+                    now=now,
+                    max_age=max_live_age,
+                )
+                if stale:
+                    ladder_errors.append(stale)
+
+        exchange_skew = abs(_ladder_time(nse_ladder) - _ladder_time(bse_ladder))
+        if exchange_skew > max_source_skew:
+            ladder_errors.append(
+                "NSE and BSE ladders are "
+                f"{exchange_skew.total_seconds() / 60:.1f} minutes apart"
+            )
+
+    same_time_control_conflict = False
+    if nse_ladder and bse_ladder and reconciliation_gap and summary.as_of is not None:
+        all_times = [
+            summary.as_of,
+            _ladder_time(nse_ladder),
+            _ladder_time(bse_ladder),
+        ]
+        control_skew = max(all_times) - min(all_times)
+        if control_skew <= timedelta(seconds=30):
+            same_time_control_conflict = True
+            ladder_errors.append(
+                "Same-time NSE+BSE ladders conflict with the published summary "
+                f"(gap {reconciliation_gap:+,})"
+            )
+        else:
+            warnings.append(
+                "NSE's published summary and the exchange ladders have different "
+                f"timestamps, so their {reconciliation_gap:+,} gap is diagnostic, "
+                "not double-counted into the cutoff."
+            )
+
+    ladders_usable = (
+        nse_ladder is not None
+        and bse_ladder is not None
+        and not ladder_errors
+        and not same_time_control_conflict
+    )
+
+    if ladders_usable:
+        assert combined_total is not None
+        demand_basis = "NSE_BSE_EXACT_PRICE_LADDERS"
+        decision_demand = combined_total
+        if summary_freshness_error:
+            warnings.append(
+                f"{summary_freshness_error}; the decision uses the fresher exchange ladders."
+            )
+    else:
+        demand_basis = "NSE_PUBLISHED_SUMMARY"
+        decision_demand = summary.total_demand
+
+    def result(
+        *,
+        status: str,
+        message: str,
+        cutoff: CutoffEstimate | None = None,
+        working_bid: Decimal | None = None,
+        errors: tuple[str, ...] = (),
+    ) -> LiveCutoffAssessment:
         return LiveCutoffAssessment(
-            status="UNSAFE",
-            message="Current total demand is not fresh enough to assess a live cutoff.",
+            status=status,
+            message=message,
             offer_basis=offer_basis,
             offer_quantity=offer_quantity,
             base_offer_quantity=summary.base_offer_quantity,
             total_offer_quantity=summary.total_offer_quantity,
+            demand_basis=demand_basis,
+            decision_demand=decision_demand,
             summary_total_demand=summary.total_demand,
-            nse_ladder_demand=nse_ladder.total_quantity if nse_ladder else None,
-            bse_ladder_demand=bse_ladder.total_quantity if bse_ladder else None,
-            combined_ladder_demand=None,
-            reconciliation_gap=None,
-            cutoff=None,
-            working_bid=None,
+            nse_ladder_demand=nse_total,
+            bse_ladder_demand=bse_total,
+            combined_ladder_demand=combined_total,
+            reconciliation_gap=reconciliation_gap,
+            cutoff=cutoff,
+            working_bid=working_bid,
             warnings=tuple(warnings),
-            errors=tuple(errors),
+            errors=errors,
         )
 
-    # A fresh consolidated total below supply proves that no marginal cutoff
-    # exists yet. Missing exchange-level detail does not change that conclusion.
-    if summary.total_demand < offer_quantity:
-        if bse_ladder is None:
+    if same_time_control_conflict:
+        return result(
+            status="UNSAFE",
+            message="Simultaneous exchange totals conflict, so no cutoff is safe.",
+            errors=tuple(ladder_errors),
+        )
+
+    if not ladders_usable and summary_freshness_error:
+        return result(
+            status="UNSAFE",
+            message="No fresh, complete source can establish current demand.",
+            errors=(summary_freshness_error, *ladder_errors),
+        )
+
+    if decision_demand < offer_quantity:
+        if not ladders_usable:
             warnings.append(
-                "BSE price detail was unavailable, but the fresh consolidated total is "
-                "below supply, so a marginal cutoff cannot exist yet."
+                "Exchange price detail is incomplete, but the fresh NSE published total "
+                "is below supply, so a marginal cutoff has not formed at that timestamp."
             )
-        return LiveCutoffAssessment(
+        return result(
             status="NO_CUTOFF",
             message=(
-                "Demand has not consumed the selected offer quantity; no allocation-"
-                "stopping price has formed."
+                "Demand in the selected, timestamped source has not consumed the offer "
+                "quantity; no allocation-stopping price has formed."
             ),
-            offer_basis=offer_basis,
-            offer_quantity=offer_quantity,
-            base_offer_quantity=summary.base_offer_quantity,
-            total_offer_quantity=summary.total_offer_quantity,
-            summary_total_demand=summary.total_demand,
-            nse_ladder_demand=nse_ladder.total_quantity if nse_ladder else None,
-            bse_ladder_demand=bse_ladder.total_quantity if bse_ladder else None,
-            combined_ladder_demand=(
-                nse_ladder.total_quantity + bse_ladder.total_quantity
-                if nse_ladder and bse_ladder
-                else None
-            ),
-            reconciliation_gap=None,
-            cutoff=None,
-            working_bid=None,
-            warnings=tuple(warnings),
-            errors=(),
         )
 
-    if nse_ladder is None:
-        errors.append("NSE exact-price ladder is missing")
-    if bse_ladder is None:
-        errors.append("BSE exact-price ladder is missing")
-    if errors:
-        return LiveCutoffAssessment(
+    if not ladders_usable:
+        return result(
             status="UNSAFE",
             message=(
-                "Demand has reached supply, but both exchange ladders are required "
-                "to locate the marginal price."
+                "Demand has reached supply, but fresh near-synchronous NSE and BSE "
+                "ladders are required to locate the marginal price."
             ),
-            offer_basis=offer_basis,
-            offer_quantity=offer_quantity,
-            base_offer_quantity=summary.base_offer_quantity,
-            total_offer_quantity=summary.total_offer_quantity,
-            summary_total_demand=summary.total_demand,
-            nse_ladder_demand=nse_ladder.total_quantity if nse_ladder else None,
-            bse_ladder_demand=bse_ladder.total_quantity if bse_ladder else None,
-            combined_ladder_demand=None,
-            reconciliation_gap=None,
-            cutoff=None,
-            working_bid=None,
-            warnings=tuple(warnings),
-            errors=tuple(errors),
+            errors=tuple(ladder_errors),
         )
 
     assert nse_ladder is not None and bse_ladder is not None
-    for ladder in (nse_ladder, bse_ladder):
-        if ladder.symbol.upper() != summary.symbol.upper():
-            errors.append(
-                f"{ladder.exchange} ladder symbol {ladder.symbol} does not match "
-                f"{summary.symbol}"
-            )
-        if ladder.category.upper() != "NON_RETAIL":
-            errors.append(f"{ladder.exchange} ladder is not NON_RETAIL")
-
-    if _is_live_session(summary, now):
-        for ladder in (nse_ladder, bse_ladder):
-            # BSE does not always publish an exchange timestamp in the JSON.
-            # The successful HTTP retrieval time is then the conservative proxy.
-            timestamp = ladder.as_of or ladder.fetched_at
-            stale = _age_error(
-                f"{ladder.exchange} ladder",
-                timestamp,
-                now=now,
-                max_age=max_live_age,
-            )
-            if stale:
-                errors.append(stale)
-
-    source_times = [summary.as_of, nse_ladder.as_of]
-    source_times.append(bse_ladder.as_of or bse_ladder.fetched_at)
-    comparable_times = [stamp for stamp in source_times if stamp is not None]
-    if len(comparable_times) >= 2:
-        skew = max(comparable_times) - min(comparable_times)
-        if skew > max_source_skew:
-            errors.append(
-                f"Exchange snapshots are {skew.total_seconds() / 60:.1f} minutes apart"
-            )
-
-    combined_total = nse_ladder.total_quantity + bse_ladder.total_quantity
-    reconciliation_gap = combined_total - summary.total_demand
-    if reconciliation_gap != 0:
-        errors.append(
-            "NSE+BSE exact-price ladders do not reconcile to the consolidated "
-            f"summary (gap {reconciliation_gap:+,})"
-        )
-
-    if errors:
-        return LiveCutoffAssessment(
-            status="UNSAFE",
-            message=(
-                "The cross-exchange book is incomplete or asynchronous; no cutoff "
-                "price is safe to publish."
-            ),
-            offer_basis=offer_basis,
-            offer_quantity=offer_quantity,
-            base_offer_quantity=summary.base_offer_quantity,
-            total_offer_quantity=summary.total_offer_quantity,
-            summary_total_demand=summary.total_demand,
-            nse_ladder_demand=nse_ladder.total_quantity,
-            bse_ladder_demand=bse_ladder.total_quantity,
-            combined_ladder_demand=combined_total,
-            reconciliation_gap=reconciliation_gap,
-            cutoff=None,
-            working_bid=None,
-            warnings=tuple(warnings),
-            errors=tuple(errors),
-        )
-
     cutoff = calculate_non_retail_cutoff(
         (*nse_ladder.bids, *bse_ladder.bids),
         offer_quantity,
         category="NON_RETAIL",
     )
     if cutoff.cutoff_price is None:
-        errors.append(
-            "Reconciled demand reached supply, but the cutoff engine returned no price"
-        )
-        return LiveCutoffAssessment(
+        return result(
             status="UNSAFE",
-            message="The reconciled book is internally inconsistent.",
-            offer_basis=offer_basis,
-            offer_quantity=offer_quantity,
-            base_offer_quantity=summary.base_offer_quantity,
-            total_offer_quantity=summary.total_offer_quantity,
-            summary_total_demand=summary.total_demand,
-            nse_ladder_demand=nse_ladder.total_quantity,
-            bse_ladder_demand=bse_ladder.total_quantity,
-            combined_ladder_demand=combined_total,
-            reconciliation_gap=reconciliation_gap,
-            cutoff=None,
-            working_bid=None,
-            warnings=tuple(warnings),
-            errors=tuple(errors),
+            message="The internally validated cross-exchange book is inconsistent.",
+            errors=(
+                "Combined exact-price demand reached supply, but the engine returned no price",
+            ),
         )
 
-    return LiveCutoffAssessment(
+    return result(
         status="ESTIMATED",
         message=(
-            "The cross-exchange exact-price book reconciles to the consolidated "
-            "total; the marginal allocation price is observable."
+            "Fresh, internally reconciled NSE and BSE ladders form a complete "
+            "cross-exchange book; the marginal allocation price is observable."
         ),
-        offer_basis=offer_basis,
-        offer_quantity=offer_quantity,
-        base_offer_quantity=summary.base_offer_quantity,
-        total_offer_quantity=summary.total_offer_quantity,
-        summary_total_demand=summary.total_demand,
-        nse_ladder_demand=nse_ladder.total_quantity,
-        bse_ladder_demand=bse_ladder.total_quantity,
-        combined_ladder_demand=combined_total,
-        reconciliation_gap=reconciliation_gap,
         cutoff=cutoff,
         working_bid=cutoff.cutoff_price + tick_size,
-        warnings=tuple(warnings),
-        errors=(),
     )

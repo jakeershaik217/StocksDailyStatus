@@ -145,6 +145,11 @@ def parse_exchange_timestamp(value: Any) -> datetime | None:
         return None
     text = str(value).strip()
     text = re.sub(r"\s+IST$", "", text, flags=re.IGNORECASE)
+    try:
+        parsed_iso = datetime.fromisoformat(text)
+        return parsed_iso if parsed_iso.tzinfo else parsed_iso.replace(tzinfo=IST)
+    except ValueError:
+        pass
     for fmt in (
         "%d-%b-%Y %H:%M:%S",
         "%d-%b-%Y %H:%M",
@@ -474,13 +479,35 @@ def parse_bse_ladder(
     fetched_at: datetime | None = None,
 ) -> LadderSnapshot:
     rows = _rows(payload)
+    _validate_cumulative_rows(
+        rows,
+        price_names=("OE_PRICE", "price", "Price", "BID_PRICE"),
+        quantity_names=("TOTAL_QTY", "quantity", "Quantity", "BID_QTY"),
+        cumulative_names=("TOTAL_CUMM", "CUM_TOTAL_QTY", "CUM_QTY"),
+        exchange="BSE",
+    )
     levels = parse_generic_bse_levels(payload, category=category)
+    if isinstance(payload, dict):
+        total_rows = payload.get("Table2")
+        if isinstance(total_rows, list) and total_rows:
+            displayed_total = _optional_int(
+                _pick(total_rows[0], ("TOTAL_CUMM", "TOTAL_QTY", "CUM_TOTAL_QTY"))
+            )
+            calculated_total = sum(level.quantity for level in levels)
+            if displayed_total is not None and displayed_total != calculated_total:
+                raise ValueError(
+                    "BSE ladder failed total-row reconciliation: "
+                    f"calculated={calculated_total}, displayed={displayed_total}"
+                )
     timestamps = {
         parsed
         for row in rows
         if (
             parsed := parse_exchange_timestamp(
-                _pick(row, ("DAT", "DATE_TIME", "TIMESTAMP", "Date", "date"))
+                _pick(
+                    row,
+                    ("DTTM", "DAT", "DATE_TIME", "TIMESTAMP", "Date", "date"),
+                )
             )
         )
         is not None

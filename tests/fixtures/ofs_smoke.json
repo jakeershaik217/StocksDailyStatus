@@ -38,8 +38,11 @@
   ],
   "bse_ladder": {
     "Table": [
-      {"OE_PRICE": "104", "TOTAL_QTY": "400", "CONFIRMEDQTY": "400", "UNC_QTY": "0"},
-      {"OE_PRICE": "102", "TOTAL_QTY": "200", "CONFIRMEDQTY": "200", "UNC_QTY": "0"}
+      {"OE_PRICE": "104", "TOTAL_QTY": "400", "CONFIRMEDQTY": "400", "UNC_QTY": "0", "TOTAL_CUMM": "400", "DTTM": "2020-01-01T15:30:00.000"},
+      {"OE_PRICE": "102", "TOTAL_QTY": "200", "CONFIRMEDQTY": "200", "UNC_QTY": "0", "TOTAL_CUMM": "600", "DTTM": "2020-01-01T15:30:00.000"}
+    ],
+    "Table2": [
+      {"PRICE": "Total", "TOTAL_CUMM": "600"}
     ]
   }
 }
