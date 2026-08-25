@@ -77,7 +77,7 @@ jobs:
           BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
           OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_offer_quantity }}
           OFS_MAX_LIVE_AGE_MINUTES: "15"
-          OFS_MAX_SOURCE_SKEW_MINUTES: "10"
+          OFS_MAX_SOURCE_SKEW_MINUTES: "3"
         run: python scripts/live_ofs.py
       - name: Upload evidence and report
         if: always()

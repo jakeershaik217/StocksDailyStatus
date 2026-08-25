@@ -63,6 +63,8 @@ def _assessment_dict(assessment: LiveCutoffAssessment) -> dict[str, Any]:
         "offer_quantity": assessment.offer_quantity,
         "base_offer_quantity": assessment.base_offer_quantity,
         "total_offer_quantity": assessment.total_offer_quantity,
+        "demand_basis": assessment.demand_basis,
+        "decision_demand": assessment.decision_demand,
         "summary_total_demand": assessment.summary_total_demand,
         "nse_ladder_demand": assessment.nse_ladder_demand,
         "bse_ladder_demand": assessment.bse_ladder_demand,
@@ -198,15 +200,23 @@ def _fmt_price(value: Decimal | None) -> str:
     return f"₹{value}" if value is not None else "not shown"
 
 
+def _fmt_quantity(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "unavailable"
+
+
 def _build_report(
     *,
     issue: OFSIssue | None,
     summary: OFSSummary,
+    nse_ladder: LadderSnapshot | None,
+    bse_ladder: LadderSnapshot | None,
     assessment: LiveCutoffAssessment,
     source_errors: list[str],
     retrieved_at: datetime,
 ) -> str:
-    subscription = Decimal(summary.total_demand) / Decimal(assessment.offer_quantity)
+    subscription = Decimal(assessment.decision_demand) / Decimal(
+        assessment.offer_quantity
+    )
     lines = [
         f"# OFS cutoff assessment — {summary.company_name} ({summary.symbol})",
         "",
@@ -216,16 +226,21 @@ def _build_report(
         "|---|---:|",
         f"| Status | **{assessment.status}** |",
         f"| NSE summary time | {summary.as_of.isoformat() if summary.as_of else 'not shown'} |",
+        f"| NSE ladder time | {_iso(nse_ladder.as_of) if nse_ladder else 'unavailable'} |",
+        f"| BSE ladder time | {_iso(bse_ladder.as_of) if bse_ladder else 'unavailable'} |",
         f"| Floor price | {_fmt_price(summary.floor_price)} |",
         f"| NSE indicative price | {_fmt_price(summary.indicative_price)} |",
         f"| LTP | {_fmt_price(summary.ltp)} |",
         f"| Selected offer quantity | {assessment.offer_quantity:,} |",
         f"| Offer basis | {assessment.offer_basis} |",
-        f"| Consolidated demand | {summary.total_demand:,} |",
+        f"| Demand used for decision | {assessment.decision_demand:,} |",
+        f"| Demand basis | {assessment.demand_basis} |",
         f"| Subscription | {subscription:.4f}x |",
-        f"| NSE exact-price demand | {assessment.nse_ladder_demand if assessment.nse_ladder_demand is not None else 'unavailable'} |",
-        f"| BSE exact-price demand | {assessment.bse_ladder_demand if assessment.bse_ladder_demand is not None else 'unavailable'} |",
-        f"| Reconciliation gap | {assessment.reconciliation_gap if assessment.reconciliation_gap is not None else 'not tested'} |",
+        f"| NSE published summary demand | {summary.total_demand:,} |",
+        f"| NSE exact-price demand | {_fmt_quantity(assessment.nse_ladder_demand)} |",
+        f"| BSE exact-price demand | {_fmt_quantity(assessment.bse_ladder_demand)} |",
+        f"| Combined exact-price demand | {_fmt_quantity(assessment.combined_ladder_demand)} |",
+        f"| Ladder-minus-summary gap | {_fmt_quantity(assessment.reconciliation_gap) if assessment.reconciliation_gap is not None else 'not tested'} |",
         "",
         "## Decision",
         "",
@@ -289,10 +304,11 @@ def _build_report(
             "## Method",
             "",
             (
-                "Exact-price (not cumulative) quantities are aggregated across NSE and BSE, "
-                "sorted from highest price to lowest, and walked until the selected offer "
-                "quantity is consumed. The engine will not publish that price unless the "
-                "combined ladder exactly matches the consolidated NSE control total."
+                "Each exchange's incremental quantities are first reconciled to its own "
+                "cumulative totals. Fresh NSE and BSE ladders must be within the allowed "
+                "timestamp skew; their exact-price quantities are then aggregated, sorted "
+                "high to low, and walked until the selected offer quantity is consumed. "
+                "NSE's slower summary is compared only at its published timestamp."
             ),
         ]
     )
@@ -318,7 +334,7 @@ def main() -> int:
     fixture_path = os.getenv("OFS_SNAPSHOT_FILE", "").strip()
     offer_override = _optional_positive_int(os.getenv("OFS_FINAL_OFFER_QUANTITY"))
     max_age_minutes = float(os.getenv("OFS_MAX_LIVE_AGE_MINUTES", "15"))
-    max_skew_minutes = float(os.getenv("OFS_MAX_SOURCE_SKEW_MINUTES", "10"))
+    max_skew_minutes = float(os.getenv("OFS_MAX_SOURCE_SKEW_MINUTES", "3"))
 
     retrieved_at = datetime.now(timezone.utc)
     source_errors: list[str] = []
@@ -358,6 +374,8 @@ def main() -> int:
     report = _build_report(
         issue=issue,
         summary=summary,
+        nse_ladder=nse,
+        bse_ladder=bse,
         assessment=assessment,
         source_errors=source_errors,
         retrieved_at=retrieved_at,

@@ -15,11 +15,14 @@ It does not substitute NSE's indicative price or VWAP for that cutoff.
 4. Adds the **incremental quantity at each price** across NSE and BSE, sorts
    prices from high to low, and finds the first level where cumulative demand
    reaches the selected offer quantity.
-5. Publishes a cutoff only if the NSE and BSE exact-price totals exactly
-   reconcile to NSE's published control total and the live sources are fresh.
+5. Validates each exchange's incremental quantities against that exchange's
+   cumulative totals and requires fresh NSE/BSE snapshots within three minutes
+   of each other before publishing a cutoff.
 
-This last check is intentional. When demand has reached supply, an NSE-only or
-asynchronous ladder can produce a believable but wrong allocation boundary.
+NSE's summary updates on a different schedule, so it is compared at its own
+timestamp rather than forced to equal newer ladders. A same-time mismatch is a
+blocking error. This avoids both double-counting and false failures caused by
+mixing an older summary with newer exchange books.
 
 ## Inputs to provide
 
@@ -42,7 +45,8 @@ provisional. Do not guess the green-shoe quantity.
 - `NO_CUTOFF`: fresh consolidated demand is below the available quantity. No
   allocation-stopping price exists yet. The floor is the current minimum
   eligible bid, not a computed cutoff.
-- `ESTIMATED`: both price ladders are present, fresh, and exactly reconciled.
+- `ESTIMATED`: both price ladders are present, fresh, internally reconciled,
+  and close enough in time to form one cross-exchange snapshot.
   The report shows the marginal cutoff, residual shares at that price, and a
   one-tick-above working price. That working price improves current price
   priority but never guarantees allotment.

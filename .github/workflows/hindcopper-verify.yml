@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - ".github/workflows/hindcopper-verify.yml"
+      - "ofs/**"
+      - "scripts/live_ofs.py"
 
 permissions:
   contents: read
@@ -30,7 +32,7 @@ jobs:
           OFS_OFFER_DATE: 25-Aug-2026
           BSE_SCRIP_CODE: "513599"
           OFS_MAX_LIVE_AGE_MINUTES: "15"
-          OFS_MAX_SOURCE_SKEW_MINUTES: "10"
+          OFS_MAX_SOURCE_SKEW_MINUTES: "3"
         run: python scripts/live_ofs.py
       - name: Upload live evidence
         if: always()

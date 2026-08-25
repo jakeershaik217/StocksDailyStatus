@@ -17,7 +17,12 @@ from ofs.sources import (
 NOW = datetime(2026, 8, 25, 11, 0, tzinfo=IST)
 
 
-def summary(*, demand: int, total_offer: int | None = None) -> OFSSummary:
+def summary(
+    *,
+    demand: int,
+    total_offer: int | None = None,
+    as_of: datetime | None = None,
+) -> OFSSummary:
     return OFSSummary(
         symbol="TEST",
         company_name="Test Limited",
@@ -32,14 +37,19 @@ def summary(*, demand: int, total_offer: int | None = None) -> OFSSummary:
         floor_price=Decimal(100),
         indicative_price=Decimal(103),
         ltp=Decimal(110),
-        as_of=datetime(2026, 8, 25, 10, 59, tzinfo=IST),
+        as_of=as_of or datetime(2026, 8, 25, 10, 59, tzinfo=IST),
         source_url="nse-summary",
         raw_payload={},
     )
 
 
-def ladder(exchange: str, rows: list[tuple[str, int]]) -> LadderSnapshot:
-    stamp = datetime(2026, 8, 25, 10, 59, tzinfo=IST)
+def ladder(
+    exchange: str,
+    rows: list[tuple[str, int]],
+    *,
+    stamp: datetime | None = None,
+) -> LadderSnapshot:
+    stamp = stamp or datetime(2026, 8, 25, 10, 59, tzinfo=IST)
     return LadderSnapshot(
         exchange=exchange,
         symbol="TEST",
@@ -102,14 +112,37 @@ def test_bse_official_fields_are_parsed():
                 "TOTAL_QTY": "2,000",
                 "CONFIRMEDQTY": "1,900",
                 "UNC_QTY": "100",
+                "TOTAL_CUMM": "2,000",
+                "DTTM": "2026-08-25T10:59:12.123",
             }
-        ]
+        ],
+        "Table2": [{"PRICE": "Total", "TOTAL_CUMM": "2,000"}],
     }
     result = parse_bse_ladder(payload, symbol="TEST")
     assert result.total_quantity == 2000
     assert result.bids[0].price == Decimal("514.05")
     assert result.confirmed_quantity == 1900
     assert result.unconfirmed_quantity == 100
+    assert result.as_of == datetime(2026, 8, 25, 10, 59, 12, 123000, tzinfo=IST)
+
+
+def test_bse_cumulative_total_mismatch_is_rejected():
+    payload = {
+        "Table": [
+            {
+                "OE_PRICE": "514",
+                "TOTAL_QTY": "500",
+                "TOTAL_CUMM": "999",
+            },
+            {
+                "OE_PRICE": "515",
+                "TOTAL_QTY": "100",
+                "TOTAL_CUMM": "100",
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="cumulative reconciliation"):
+        parse_bse_ladder(payload, symbol="TEST")
 
 
 def test_bse_quantity_bucket_mismatch_is_rejected():
@@ -169,6 +202,7 @@ def test_fresh_under_subscribed_control_total_needs_no_marginal_price():
     assert result.status == "NO_CUTOFF"
     assert result.cutoff is None
     assert result.offer_quantity == 1000
+    assert result.demand_basis == "NSE_PUBLISHED_SUMMARY"
 
 
 def test_total_issue_size_is_used_after_green_shoe_is_published():
@@ -206,6 +240,31 @@ def test_reconciled_cross_exchange_book_returns_true_marginal_price():
     assert result.cutoff.cutoff_price == Decimal(102)
     assert result.working_bid == Decimal("102.05")
     assert result.reconciliation_gap == 0
+    assert result.demand_basis == "NSE_BSE_EXACT_PRICE_LADDERS"
+
+
+def test_newer_near_synchronous_ladders_can_use_an_older_summary_as_control():
+    result = assess_live_cutoff(
+        summary(
+            demand=900,
+            as_of=datetime(2026, 8, 25, 10, 50, tzinfo=IST),
+        ),
+        ladder(
+            "NSE",
+            [("105", 500)],
+            stamp=datetime(2026, 8, 25, 10, 59, tzinfo=IST),
+        ),
+        ladder(
+            "BSE",
+            [("104", 600)],
+            stamp=datetime(2026, 8, 25, 11, 0, tzinfo=IST),
+        ),
+        now=NOW,
+    )
+    assert result.status == "ESTIMATED"
+    assert result.decision_demand == 1100
+    assert result.reconciliation_gap == 200
+    assert any("different timestamps" in warning for warning in result.warnings)
 
 
 def test_cross_exchange_reconciliation_gap_withholds_cutoff():
@@ -217,4 +276,4 @@ def test_cross_exchange_reconciliation_gap_withholds_cutoff():
     )
     assert result.status == "UNSAFE"
     assert result.reconciliation_gap == -100
-    assert any("do not reconcile" in error for error in result.errors)
+    assert any("conflict" in error for error in result.errors)
