@@ -1,6 +1,22 @@
 name: OFS Cutoff Analyzer
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ofs-cutoff.yml"
+      - "ofs/**"
+      - "scripts/live_ofs.py"
+      - "tests/**"
+      - "requirements.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/ofs-cutoff.yml"
+      - "ofs/**"
+      - "scripts/live_ofs.py"
+      - "tests/**"
+      - "requirements.txt"
   workflow_dispatch:
     inputs:
       symbol:
@@ -44,7 +60,19 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
+      - name: Smoke-test cutoff analyzer
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          OFS_SYMBOL: SMOKE
+          OFS_OFFERED: "2000"
+          OFS_CATEGORY: NON_RETAIL
+          NSE_MBP_URL: ""
+          BSE_DEPTH_URL: ""
+          OFS_FINAL_BID_JSON: >-
+            [{"price":"105.50","quantity":"1,500","exchange":"NSE"},{"price":"104","quantity":"700","exchange":"BSE"}]
+        run: python scripts/live_ofs.py
       - name: Run T-day final cutoff analyzer
+        if: github.event_name == 'workflow_dispatch'
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_OFFERED: ${{ inputs.final_offer_quantity }}
