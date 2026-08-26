@@ -50,6 +50,7 @@ class OFSSummary:
     as_of: datetime | None
     source_url: str
     raw_payload: dict[str, Any]
+    cutoff_price: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,9 @@ def parse_nse_summary(
         as_of=parse_exchange_timestamp(payload.get("timestamp")),
         source_url=source_url,
         raw_payload=payload,
+        cutoff_price=_optional_decimal(
+            _pick(row, ("cutOffPrice", "cutoffPrice", "CutOffPrice"))
+        ),
     )
 
 
@@ -590,6 +594,7 @@ def fetch_nse_market_by_price(
     offer_date: str | None = None,
     endpoint_url: str | None = None,
     category: str = "NON_RETAIL",
+    series: str = "IS",
 ) -> LadderSnapshot:
     if endpoint_url:
         url = endpoint_url
@@ -602,7 +607,7 @@ def fetch_nse_market_by_price(
     page_url = f"{NSE_BASE_URL}/market-data/ofs-information?" + urlencode(
         {
             "symbol": symbol.upper(),
-            "series": "IS",
+            "series": series.upper(),
             "type": "Active",
             "offerDate": offer_date or "",
         }
