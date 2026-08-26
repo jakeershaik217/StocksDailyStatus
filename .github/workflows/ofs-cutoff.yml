@@ -45,6 +45,11 @@ on:
         required: false
         default: "25-Aug-2026"
         type: string
+      retail_date:
+        description: "Retail session date; blank reads the NSE RS issue details"
+        required: false
+        default: ""
+        type: string
       final_non_retail_quantity:
         description: "Optional final non-retail quantity override"
         required: false
@@ -111,17 +116,19 @@ jobs:
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_OFFER_DATE: ${{ inputs.offer_date }}
+          OFS_RETAIL_DATE: ${{ inputs.retail_date }}
           BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
           OFS_REFERENCE_CUTOFF: ${{ inputs.reference_cutoff }}
           OFS_GROSS_FINAL_OFFER_QUANTITY: ${{ inputs.gross_final_offer_quantity }}
           OFS_RETAIL_RESERVED_QUANTITY: ${{ inputs.retail_reserved_quantity }}
           OFS_RETAIL_RESERVED_PCT: ${{ inputs.retail_reserved_pct }}
         run: python scripts/live_retail_ofs.py
-      - name: Verify live HINDCOPPER retail feed
+      - name: Verify live HINDCOPPER retail feeds
         if: github.event_name == 'push' && github.ref == 'refs/heads/fix/retail-ofs-live-analysis'
         env:
           OFS_SYMBOL: HINDCOPPER
           OFS_OFFER_DATE: 25-Aug-2026
+          OFS_RETAIL_DATE: 26-Aug-2026
           BSE_SCRIP_CODE: "513599"
           OFS_GROSS_FINAL_OFFER_QUANTITY: "58021442"
           OFS_RETAIL_RESERVED_PCT: "10"
