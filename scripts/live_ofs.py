@@ -264,16 +264,19 @@ def _build_report(
                 f"Residual shares available at cutoff: {assessment.cutoff.quantity_needed_at_cutoff:,}",
             ]
         )
-    elif assessment.status == "NO_CUTOFF":
+    elif assessment.status == "UNDER_SUBSCRIBED":
         lines.extend(
             [
                 "",
-                "**Expected cutoff now: not formed.**",
+                (
+                    "**Predicted allocation cutoff while under-subscribed: "
+                    f"{_fmt_price(summary.floor_price)}.**"
+                ),
                 "",
                 (
-                    f"The floor price ({_fmt_price(summary.floor_price)}) is currently the "
-                    "minimum eligible non-retail bid, but it is not a calculated cutoff. "
-                    "The marginal price can rise if demand increases before the book closes."
+                    "Every currently valid bid at or above the floor is within available "
+                    "supply. This floor-based prediction can rise to a ladder-derived "
+                    "marginal cutoff if demand reaches the offer quantity before closing."
                 ),
             ]
         )
