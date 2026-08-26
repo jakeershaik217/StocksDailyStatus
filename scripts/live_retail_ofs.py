@@ -78,19 +78,19 @@ def _request_json(
 
 def _fetch_nse_retail(
     symbol: str,
-    offer_date: str,
+    retail_date: str,
 ) -> RetailLadderSnapshot:
     page_url = "https://www.nseindia.com/market-data/ofs-information?" + urlencode(
         {
             "symbol": symbol,
             "series": "RS",
             "type": "Active",
-            "offerDate": offer_date,
+            "offerDate": retail_date,
         }
     )
     payload, source_url = _request_json(
         NSE_RETAIL_URL,
-        params={"symbol": symbol, "offerdate": offer_date},
+        params={"symbol": symbol, "offerdate": retail_date},
         headers=_headers(referer=page_url),
     )
     return parse_retail_ladder(
@@ -98,6 +98,7 @@ def _fetch_nse_retail(
         exchange="NSE",
         symbol=symbol,
         source_url=source_url,
+        expected_series="RS",
     )
 
 
@@ -186,9 +187,16 @@ def main() -> int:
     retrieved_at = datetime.now(timezone.utc)
     try:
         issue = retry(lambda: fetch_nse_issue(symbol, series="IS"))
+        retail_issue = retry(lambda: fetch_nse_issue(symbol, series="RS"))
         resolved_date = offer_date or issue.offer_date
         if not resolved_date:
             raise RuntimeError("OFS offer date could not be determined")
+        retail_date = (
+            os.getenv("OFS_RETAIL_DATE", "").strip()
+            or retail_issue.offer_date
+        )
+        if not retail_date:
+            raise RuntimeError("Retail OFS session date could not be determined")
 
         final_non_retail = retry(
             lambda: fetch_nse_summary(
@@ -229,7 +237,7 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=2) as executor:
             nse_future = executor.submit(
                 retry,
-                lambda: _fetch_nse_retail(symbol, resolved_date),
+                lambda: _fetch_nse_retail(symbol, retail_date),
             )
             bse_future = executor.submit(
                 retry,
@@ -269,6 +277,7 @@ def main() -> int:
         "input": {
             "symbol": symbol,
             "offer_date": resolved_date,
+            "retail_date": retail_date,
             "bse_scrip_code": bse_scrip,
             "gross_final_offer_quantity": gross_final,
             "explicit_retail_quantity": explicit_retail,
