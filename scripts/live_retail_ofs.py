@@ -145,6 +145,7 @@ def _build_report(
             "",
             "| Metric | Value |",
             "|---|---:|",
+            f"| Status | **{assessment.status}** |",
             f"| Confirmed T-day non-retail cutoff | ₹{assessment.reference_cutoff} |",
             f"| Cutoff basis | {reference_basis} |",
             f"| Retail reserved quantity | {assessment.reserved_quantity:,} |",
@@ -158,19 +159,32 @@ def _build_report(
             f"| Eligible Cut-off-order demand | {assessment.cutoff_bid_quantity:,} |",
             f"| Total eligible retail demand | {assessment.eligible_demand:,} |",
             f"| Retail subscription | {assessment.subscription:.4f}x |",
+            f"| Predicted retail allocation cutoff | **₹{assessment.predicted_cutoff}** |",
+            f"| Demand above predicted cutoff | {assessment.demand_above_cutoff:,} |",
+            f"| Demand at predicted cutoff | {assessment.demand_at_cutoff:,} |",
+            f"| Shares available at predicted cutoff | {assessment.shares_available_at_cutoff:,} |",
+            f"| Unallocated demand at predicted cutoff | {assessment.unallocated_demand_at_cutoff:,} |",
             (
-                "| Estimated proportionate allocation | "
-                f"{assessment.estimated_allocation_ratio:.4%} |"
+                "| Estimated allocation at predicted cutoff | "
+                f"{assessment.cutoff_level_allocation_ratio:.4%} |"
             ),
             "",
             "## Decision",
             "",
-            f"Working bid/reference price: **₹{assessment.working_bid}**.",
+            (
+                f"Current price above the predicted cutoff: **₹{assessment.working_bid}**."
+                if assessment.status in {"PREDICTED_CUTOFF", "FULLY_SUBSCRIBED"}
+                else (
+                    "The retail book is under-subscribed. The current minimum eligible "
+                    f"allocation price remains **₹{assessment.reference_cutoff}**."
+                )
+            ),
             "",
             (
-                "Literal Cut-off orders from both exchanges are counted as eligible. "
-                "This is an allocation estimate, not a newly discovered retail cutoff; "
-                "final allocation remains exchange-controlled."
+                "Numeric bids above the predicted cutoff have higher price priority; "
+                "only the remaining shares are available to bids at the cutoff. Literal "
+                "Cut-off orders are placed in the ladder at the confirmed T-day cutoff. "
+                "This remains a live estimate until the exchange finalizes allocation."
             ),
         ]
     ) + "\n"
@@ -302,11 +316,18 @@ def main() -> int:
             "raw": bse.raw_payload,
         },
         "assessment": {
+            "status": assessment.status,
+            "predicted_cutoff": str(assessment.predicted_cutoff),
+            "working_bid_above_cutoff": str(assessment.working_bid),
             "eligible_demand": assessment.eligible_demand,
             "total_demand": assessment.total_demand,
             "subscription": str(assessment.subscription),
-            "estimated_allocation_ratio": str(
-                assessment.estimated_allocation_ratio
+            "demand_above_cutoff": assessment.demand_above_cutoff,
+            "demand_at_cutoff": assessment.demand_at_cutoff,
+            "shares_available_at_cutoff": assessment.shares_available_at_cutoff,
+            "unallocated_demand_at_cutoff": assessment.unallocated_demand_at_cutoff,
+            "cutoff_level_allocation_ratio": str(
+                assessment.cutoff_level_allocation_ratio
             ),
         },
     }
