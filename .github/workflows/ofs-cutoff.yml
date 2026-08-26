@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - fix/retail-ofs-live-analysis
     paths:
       - ".github/workflows/ofs-cutoff.yml"
       - "ofs/**"
@@ -122,16 +121,6 @@ jobs:
           OFS_GROSS_FINAL_OFFER_QUANTITY: ${{ inputs.gross_final_offer_quantity }}
           OFS_RETAIL_RESERVED_QUANTITY: ${{ inputs.retail_reserved_quantity }}
           OFS_RETAIL_RESERVED_PCT: ${{ inputs.retail_reserved_pct }}
-        run: python scripts/live_retail_ofs.py
-      - name: Verify live HINDCOPPER retail feeds
-        if: github.event_name == 'push' && github.ref == 'refs/heads/fix/retail-ofs-live-analysis'
-        env:
-          OFS_SYMBOL: HINDCOPPER
-          OFS_OFFER_DATE: 25-Aug-2026
-          OFS_RETAIL_DATE: 26-Aug-2026
-          BSE_SCRIP_CODE: "513599"
-          OFS_GROSS_FINAL_OFFER_QUANTITY: "58021442"
-          OFS_RETAIL_RESERVED_PCT: "10"
         run: python scripts/live_retail_ofs.py
       - name: Upload evidence and report
         if: always()
