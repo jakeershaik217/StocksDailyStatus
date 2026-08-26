@@ -29,16 +29,32 @@ def test_bse_literal_cutoff_row_is_preserved_and_counted():
 
 def test_nse_cutoff_flag_is_preserved_even_when_price_is_zero():
     payload = [
-        {"pri": "0", "totQty": "700", "isCutOff": "true"},
-        {"pri": "522", "totQty": "200"},
+        {"pri": "0", "totQty": "700", "isCutOff": "true", "ser": "RS"},
+        {"pri": "522", "totQty": "200", "ser": "RS"},
     ]
     result = parse_retail_ladder(
         payload,
         exchange="NSE",
         symbol="TEST",
+        expected_series="RS",
     )
     assert result.cutoff_bid_quantity == 700
     assert result.numeric_bid_quantity == 200
+
+
+def test_non_retail_series_is_rejected_from_retail_book():
+    payload = [{"pri": "520", "totQty": "700", "ser": "IS"}]
+    try:
+        parse_retail_ladder(
+            payload,
+            exchange="NSE",
+            symbol="TEST",
+            expected_series="RS",
+        )
+    except ValueError as exc:
+        assert "series mismatch" in str(exc)
+    else:
+        raise AssertionError("IS ladder must not be accepted as retail")
 
 
 def test_cutoff_orders_are_eligible_with_numeric_bids_at_or_above_reference():
