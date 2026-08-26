@@ -90,7 +90,7 @@ def _fetch_nse_retail(
     )
     payload, source_url = _request_json(
         NSE_RETAIL_URL,
-        params={"symbol": symbol, "offerdate": retail_date},
+        params={"symbol": symbol, "offerdate": retail_date, "series": "RS"},
         headers=_headers(referer=page_url),
     )
     return parse_retail_ladder(
