@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
-from .engine import BidLevel
+from .engine import BidLevel, CutoffEstimate, calculate_non_retail_cutoff
 from .sources import IST, parse_exchange_timestamp
 
 
@@ -32,6 +32,7 @@ class RetailLadderSnapshot:
 
 @dataclass(frozen=True)
 class RetailAssessment:
+    status: str
     reference_cutoff: Decimal
     reserved_quantity: int
     numeric_bid_quantity: int
@@ -41,7 +42,14 @@ class RetailAssessment:
     total_demand: int
     subscription: Decimal
     estimated_allocation_ratio: Decimal
+    predicted_cutoff: Decimal
+    demand_above_cutoff: int
+    demand_at_cutoff: int
+    shares_available_at_cutoff: int
+    unallocated_demand_at_cutoff: int
+    cutoff_level_allocation_ratio: Decimal
     working_bid: Decimal
+    cutoff: CutoffEstimate | None
     methodology: str
 
 
@@ -243,35 +251,102 @@ def assess_retail(
     reference_cutoff: Decimal,
     reserved_quantity: int,
     cutoff_bid_quantity: int = 0,
+    tick_size: Decimal = Decimal("0.05"),
 ) -> RetailAssessment:
-    """Assess T+1 retail demand against the confirmed T-day cutoff.
+    """Predict the T+1 retail marginal allocation price.
 
-    A literal Cut-off order agrees to the exchange-determined retail price and
-    is therefore eligible. It must not be discarded merely because it has no
-    numeric price in the public ladder.
+    A literal Cut-off order accepts the confirmed T-day non-retail cutoff, so it
+    enters the retail price-priority ladder at ``reference_cutoff``. Numeric
+    bids below that price are ineligible. Eligible levels from both exchanges
+    are aggregated and walked high-to-low against the retail reservation.
     """
     if reserved_quantity <= 0:
         raise ValueError("reserved_quantity must be positive")
     if cutoff_bid_quantity < 0:
         raise ValueError("cutoff_bid_quantity cannot be negative")
+    if tick_size <= 0:
+        raise ValueError("tick_size must be positive")
 
     levels = [level for level in bids if int(level.quantity) > 0]
     numeric_total = sum(int(level.quantity) for level in levels)
-    eligible_numeric = sum(
-        int(level.quantity)
+    eligible_levels = [
+        level
         for level in levels
         if Decimal(str(level.price)) >= reference_cutoff
-    )
+    ]
+    eligible_numeric = sum(int(level.quantity) for level in eligible_levels)
+    if cutoff_bid_quantity:
+        eligible_levels.append(
+            BidLevel(
+                price=reference_cutoff,
+                quantity=cutoff_bid_quantity,
+                exchange="NSE_BSE_CUTOFF",
+                category="RETAIL",
+            )
+        )
     total = numeric_total + cutoff_bid_quantity
     eligible = eligible_numeric + cutoff_bid_quantity
     subscription = Decimal(eligible) / Decimal(reserved_quantity)
-    allocation_ratio = (
+
+    cutoff: CutoffEstimate | None = None
+    predicted_cutoff = reference_cutoff
+    demand_above = sum(
+        int(level.quantity)
+        for level in eligible_levels
+        if Decimal(str(level.price)) > reference_cutoff
+    )
+    demand_at = sum(
+        int(level.quantity)
+        for level in eligible_levels
+        if Decimal(str(level.price)) == reference_cutoff
+    )
+    shares_at_cutoff = demand_at
+    cutoff_ratio = Decimal(1) if demand_at else Decimal(0)
+    unallocated_at_cutoff = 0
+    working_bid = reference_cutoff
+
+    if eligible >= reserved_quantity:
+        cutoff = calculate_non_retail_cutoff(
+            eligible_levels,
+            reserved_quantity,
+            category="RETAIL",
+        )
+        if cutoff.cutoff_price is None:
+            raise ValueError("retail book reached supply but no cutoff was found")
+        predicted_cutoff = cutoff.cutoff_price
+        demand_above = cutoff.cumulative_quantity_above_cutoff
+        demand_at = cutoff.quantity_at_cutoff_price
+        shares_at_cutoff = cutoff.quantity_needed_at_cutoff
+        unallocated_at_cutoff = max(demand_at - shares_at_cutoff, 0)
+        cutoff_ratio = (
+            Decimal(shares_at_cutoff) / Decimal(demand_at)
+            if demand_at
+            else Decimal(0)
+        )
+        higher_prices = sorted(
+            {
+                Decimal(str(level.price))
+                for level in eligible_levels
+                if Decimal(str(level.price)) > predicted_cutoff
+            }
+        )
+        working_bid = higher_prices[0] if higher_prices else predicted_cutoff + tick_size
+        status = (
+            "PREDICTED_CUTOFF"
+            if eligible > reserved_quantity
+            else "FULLY_SUBSCRIBED"
+        )
+    else:
+        status = "UNDER_SUBSCRIBED"
+
+    overall_ratio = (
         min(Decimal(1), Decimal(reserved_quantity) / Decimal(eligible))
         if eligible
         else Decimal(0)
     )
 
     return RetailAssessment(
+        status=status,
         reference_cutoff=reference_cutoff,
         reserved_quantity=reserved_quantity,
         numeric_bid_quantity=numeric_total,
@@ -280,7 +355,14 @@ def assess_retail(
         eligible_demand=eligible,
         total_demand=total,
         subscription=subscription,
-        estimated_allocation_ratio=allocation_ratio,
-        working_bid=reference_cutoff,
-        methodology="t_plus_1_retail_including_literal_cutoff_orders",
+        estimated_allocation_ratio=overall_ratio,
+        predicted_cutoff=predicted_cutoff,
+        demand_above_cutoff=demand_above,
+        demand_at_cutoff=demand_at,
+        shares_available_at_cutoff=shares_at_cutoff,
+        unallocated_demand_at_cutoff=unallocated_at_cutoff,
+        cutoff_level_allocation_ratio=cutoff_ratio,
+        working_bid=working_bid,
+        cutoff=cutoff,
+        methodology="retail_price_priority_with_cutoff_orders_at_t_day_cutoff",
     )
