@@ -242,10 +242,11 @@ def assess_live_cutoff(
                 "is below supply, so a marginal cutoff has not formed at that timestamp."
             )
         return result(
-            status="NO_CUTOFF",
+            status="UNDER_SUBSCRIBED",
             message=(
                 "Demand in the selected, timestamped source has not consumed the offer "
-                "quantity; no allocation-stopping price has formed."
+                "quantity; all valid bids at or above the floor are presently within "
+                "the available allocation."
             ),
         )
 
