@@ -74,6 +74,52 @@ def test_cutoff_orders_are_eligible_with_numeric_bids_at_or_above_reference():
     assert result.eligible_demand == 900
     assert result.subscription == Decimal("0.9")
     assert result.estimated_allocation_ratio == Decimal("1")
+    assert result.status == "UNDER_SUBSCRIBED"
+    assert result.predicted_cutoff == Decimal("520")
+    assert result.working_bid == Decimal("520")
+
+
+def test_oversubscribed_retail_book_predicts_price_priority_cutoff():
+    bids = [
+        BidLevel(Decimal("525"), 1_500_000, "NSE", "RETAIL"),
+        BidLevel(Decimal("524"), 2_000_000, "BSE", "RETAIL"),
+        BidLevel(Decimal("523"), 1_500_000, "NSE", "RETAIL"),
+        BidLevel(Decimal("522"), 2_000_000, "BSE", "RETAIL"),
+    ]
+    result = assess_retail(
+        bids,
+        reference_cutoff=Decimal("520"),
+        reserved_quantity=5_802_146,
+        cutoff_bid_quantity=4_604_292,
+    )
+    assert result.status == "PREDICTED_CUTOFF"
+    assert result.predicted_cutoff == Decimal("522")
+    assert result.demand_above_cutoff == 5_000_000
+    assert result.demand_at_cutoff == 2_000_000
+    assert result.shares_available_at_cutoff == 802_146
+    assert result.unallocated_demand_at_cutoff == 1_197_854
+    assert result.cutoff_level_allocation_ratio == (
+        Decimal(802_146) / Decimal(2_000_000)
+    )
+    assert result.working_bid == Decimal("523")
+
+
+def test_cutoff_orders_compete_at_confirmed_t_day_cutoff():
+    bids = [
+        BidLevel(Decimal("521"), 600, "NSE", "RETAIL"),
+        BidLevel(Decimal("520"), 200, "BSE", "RETAIL"),
+    ]
+    result = assess_retail(
+        bids,
+        reference_cutoff=Decimal("520"),
+        reserved_quantity=1_000,
+        cutoff_bid_quantity=700,
+    )
+    assert result.predicted_cutoff == Decimal("520")
+    assert result.demand_above_cutoff == 600
+    assert result.demand_at_cutoff == 900
+    assert result.shares_available_at_cutoff == 400
+    assert result.cutoff_level_allocation_ratio == Decimal(400) / Decimal(900)
 
 
 def test_exact_retail_quantity_uses_gross_minus_final_non_retail():
