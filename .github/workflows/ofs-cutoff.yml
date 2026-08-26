@@ -14,7 +14,7 @@ on:
         default: "513599"
         type: string
       mode:
-        description: "Analysis mode"
+        description: "Analysis mode; AUTO uses reference cutoff presence to select retail"
         required: true
         default: "AUTO"
         type: choice
@@ -28,12 +28,12 @@ on:
         default: ""
         type: string
       final_offer_quantity:
-        description: "Final offer quantity after green-shoe; leave blank to use exchange data"
+        description: "Final offer quantity after green-shoe"
         required: false
         default: ""
         type: string
       reference_cutoff:
-        description: "Confirmed T-day non-retail cutoff for RETAIL mode; e.g. 520.00"
+        description: "Confirmed T-day non-retail cutoff for RETAIL/AUTO retail mode; e.g. 520.00"
         required: false
         default: ""
         type: string
@@ -61,7 +61,7 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
       - name: Run non-retail analyzer
-        if: inputs.mode != 'RETAIL'
+        if: inputs.mode == 'NON_RETAIL' || (inputs.mode == 'AUTO' && inputs.reference_cutoff == '')
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_SERIES: IS
@@ -73,7 +73,7 @@ jobs:
           OFS_MAX_SOURCE_SKEW_MINUTES: "3"
         run: python scripts/live_ofs.py
       - name: Run retail analyzer
-        if: inputs.mode == 'RETAIL'
+        if: inputs.mode == 'RETAIL' || (inputs.mode == 'AUTO' && inputs.reference_cutoff != '')
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_OFFER_DATE: ${{ inputs.offer_date }}
