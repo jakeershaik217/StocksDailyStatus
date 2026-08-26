@@ -199,7 +199,7 @@ def test_fresh_under_subscribed_control_total_needs_no_marginal_price():
         None,
         now=NOW,
     )
-    assert result.status == "NO_CUTOFF"
+    assert result.status == "UNDER_SUBSCRIBED"
     assert result.cutoff is None
     assert result.offer_quantity == 1000
     assert result.demand_basis == "NSE_PUBLISHED_SUMMARY"
@@ -212,7 +212,7 @@ def test_total_issue_size_is_used_after_green_shoe_is_published():
         None,
         now=NOW,
     )
-    assert result.status == "NO_CUTOFF"
+    assert result.status == "UNDER_SUBSCRIBED"
     assert result.offer_quantity == 1200
     assert result.offer_basis == "NSE_TOTAL_ISSUE"
 
