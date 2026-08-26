@@ -85,12 +85,25 @@ def parse_retail_ladder(
     symbol: str,
     source_url: str = "",
     fetched_at: datetime | None = None,
+    expected_series: str | None = None,
 ) -> RetailLadderSnapshot:
     """Parse numeric and literal Cut-off retail bids without losing either."""
     rows = _rows(payload)
     bids: list[BidLevel] = []
     cutoff_quantity = 0
     timestamps: set[datetime] = set()
+    reported_series = {
+        str(value).strip().upper()
+        for row in rows
+        if (value := _pick(row, ("ser", "series", "Series")))
+        not in (None, "")
+    }
+    if expected_series and reported_series != {expected_series.upper()}:
+        shown = ", ".join(sorted(reported_series)) or "not shown"
+        raise ValueError(
+            f"{exchange} retail ladder series mismatch: expected "
+            f"{expected_series.upper()}, received {shown}"
+        )
 
     for row in rows:
         price_value = _pick(
