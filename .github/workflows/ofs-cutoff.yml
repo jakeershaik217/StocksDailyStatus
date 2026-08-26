@@ -1,8 +1,34 @@
 name: OFS Cutoff Analyzer
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ofs-cutoff.yml"
+      - "ofs/**"
+      - "scripts/live_ofs.py"
+      - "scripts/live_retail_ofs.py"
+      - "tests/**"
+      - "requirements.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/ofs-cutoff.yml"
+      - "ofs/**"
+      - "scripts/live_ofs.py"
+      - "scripts/live_retail_ofs.py"
+      - "tests/**"
+      - "requirements.txt"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "OFS category to analyze"
+        required: true
+        default: "RETAIL"
+        type: choice
+        options:
+          - RETAIL
+          - NON_RETAIL
       symbol:
         description: "NSE OFS symbol"
         required: true
@@ -13,32 +39,33 @@ on:
         required: true
         default: "513599"
         type: string
-      mode:
-        description: "Analysis mode; AUTO uses reference cutoff presence to select retail"
-        required: true
-        default: "AUTO"
-        type: choice
-        options:
-          - AUTO
-          - NON_RETAIL
-          - RETAIL
       offer_date:
-        description: "OFS date as DD-Mon-YYYY; blank lets exchange details supply it"
+        description: "First OFS date as DD-Mon-YYYY"
+        required: false
+        default: "25-Aug-2026"
+        type: string
+      final_non_retail_quantity:
+        description: "Optional final non-retail quantity override"
         required: false
         default: ""
         type: string
-      final_offer_quantity:
-        description: "Final offer quantity after green-shoe"
+      gross_final_offer_quantity:
+        description: "Gross final offer including retail reservation"
+        required: false
+        default: "58021442"
+        type: string
+      retail_reserved_quantity:
+        description: "Optional exact retail quantity override"
         required: false
         default: ""
         type: string
       reference_cutoff:
-        description: "Confirmed T-day non-retail cutoff for RETAIL/AUTO retail mode; e.g. 520.00"
+        description: "Optional confirmed non-retail cutoff; blank reads NSE final value"
         required: false
         default: ""
         type: string
       retail_reserved_pct:
-        description: "Retail reservation percentage when not otherwise exposed"
+        description: "Fallback retail reservation percentage"
         required: false
         default: "10"
         type: string
@@ -60,26 +87,33 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run unit tests
         run: python -m pytest -q
+      - name: Smoke-test non-retail reporting
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          OFS_SYMBOL: SMOKE
+          OFS_SNAPSHOT_FILE: tests/fixtures/ofs_smoke.json
+        run: python scripts/live_ofs.py
       - name: Run non-retail analyzer
-        if: inputs.mode == 'NON_RETAIL' || (inputs.mode == 'AUTO' && inputs.reference_cutoff == '')
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'NON_RETAIL'
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_SERIES: IS
           OFS_CATEGORY: NON_RETAIL
           OFS_OFFER_DATE: ${{ inputs.offer_date }}
           BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
-          OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_offer_quantity }}
+          OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_non_retail_quantity }}
           OFS_MAX_LIVE_AGE_MINUTES: "15"
           OFS_MAX_SOURCE_SKEW_MINUTES: "3"
         run: python scripts/live_ofs.py
       - name: Run retail analyzer
-        if: inputs.mode == 'RETAIL' || (inputs.mode == 'AUTO' && inputs.reference_cutoff != '')
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'RETAIL'
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
           OFS_OFFER_DATE: ${{ inputs.offer_date }}
           BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
           OFS_REFERENCE_CUTOFF: ${{ inputs.reference_cutoff }}
-          OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_offer_quantity }}
+          OFS_GROSS_FINAL_OFFER_QUANTITY: ${{ inputs.gross_final_offer_quantity }}
+          OFS_RETAIL_RESERVED_QUANTITY: ${{ inputs.retail_reserved_quantity }}
           OFS_RETAIL_RESERVED_PCT: ${{ inputs.retail_reserved_pct }}
         run: python scripts/live_retail_ofs.py
       - name: Upload evidence and report
