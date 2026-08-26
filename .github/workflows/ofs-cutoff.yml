@@ -1,22 +1,6 @@
 name: OFS Cutoff Analyzer
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/ofs-cutoff.yml"
-      - "ofs/**"
-      - "scripts/live_ofs.py"
-      - "tests/**"
-      - "requirements.txt"
-  pull_request:
-    paths:
-      - ".github/workflows/ofs-cutoff.yml"
-      - "ofs/**"
-      - "scripts/live_ofs.py"
-      - "tests/**"
-      - "requirements.txt"
   workflow_dispatch:
     inputs:
       symbol:
@@ -25,23 +9,38 @@ on:
         default: "HINDCOPPER"
         type: string
       bse_scrip_code:
-        description: "BSE numeric scrip code (HINDCOPPER: 513599)"
+        description: "BSE numeric scrip code"
         required: true
         default: "513599"
         type: string
-      offer_date:
-        description: "Non-retail date as DD-Mon-YYYY; blank lets NSE issue details supply it"
-        required: false
-        default: "25-Aug-2026"
-        type: string
-      series:
-        description: "NSE non-retail OFS series"
+      mode:
+        description: "Analysis mode"
         required: true
-        default: "IS"
+        default: "AUTO"
+        type: choice
+        options:
+          - AUTO
+          - NON_RETAIL
+          - RETAIL
+      offer_date:
+        description: "OFS date as DD-Mon-YYYY; blank lets exchange details supply it"
+        required: false
+        default: ""
         type: string
       final_offer_quantity:
-        description: "Optional final non-retail quantity override after green-shoe exercise"
+        description: "Final offer quantity after green-shoe; leave blank to use exchange data"
         required: false
+        default: ""
+        type: string
+      reference_cutoff:
+        description: "Confirmed T-day non-retail cutoff for RETAIL mode; e.g. 520.00"
+        required: false
+        default: ""
+        type: string
+      retail_reserved_pct:
+        description: "Retail reservation percentage when not otherwise exposed"
+        required: false
+        default: "10"
         type: string
 
 permissions:
@@ -61,17 +60,11 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run unit tests
         run: python -m pytest -q
-      - name: Smoke-test the complete reporting path
-        if: github.event_name != 'workflow_dispatch'
-        env:
-          OFS_SYMBOL: SMOKE
-          OFS_SNAPSHOT_FILE: tests/fixtures/ofs_smoke.json
-        run: python scripts/live_ofs.py
-      - name: Fetch and analyze the live non-retail book
-        if: github.event_name == 'workflow_dispatch'
+      - name: Run non-retail analyzer
+        if: inputs.mode != 'RETAIL'
         env:
           OFS_SYMBOL: ${{ inputs.symbol }}
-          OFS_SERIES: ${{ inputs.series }}
+          OFS_SERIES: IS
           OFS_CATEGORY: NON_RETAIL
           OFS_OFFER_DATE: ${{ inputs.offer_date }}
           BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
@@ -79,6 +72,16 @@ jobs:
           OFS_MAX_LIVE_AGE_MINUTES: "15"
           OFS_MAX_SOURCE_SKEW_MINUTES: "3"
         run: python scripts/live_ofs.py
+      - name: Run retail analyzer
+        if: inputs.mode == 'RETAIL'
+        env:
+          OFS_SYMBOL: ${{ inputs.symbol }}
+          OFS_OFFER_DATE: ${{ inputs.offer_date }}
+          BSE_SCRIP_CODE: ${{ inputs.bse_scrip_code }}
+          OFS_REFERENCE_CUTOFF: ${{ inputs.reference_cutoff }}
+          OFS_FINAL_OFFER_QUANTITY: ${{ inputs.final_offer_quantity }}
+          OFS_RETAIL_RESERVED_PCT: ${{ inputs.retail_reserved_pct }}
+        run: python scripts/live_retail_ofs.py
       - name: Upload evidence and report
         if: always()
         uses: actions/upload-artifact@v4
