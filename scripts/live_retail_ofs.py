@@ -22,7 +22,7 @@ from ofs.retail import (
 )
 from ofs.sources import fetch_nse_issue, fetch_nse_summary, retry
 
-NSE_RETAIL_URL = "https://www.nseindia.com/api/ofs-activeissues-dd"
+NSE_RETAIL_URL = "https://www.nseindia.com/api/ofs-activeissues-dr"
 BSE_RETAIL_URL = "https://api.bseindia.com/BseIndiaAPI/api/bsebidofs_details/w"
 
 
