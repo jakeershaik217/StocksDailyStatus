@@ -105,7 +105,7 @@ jobs:
           OFS_INTERVAL_1525_1529: "5"
           OFS_INTERVAL_1529_152930: "4"
           OFS_INTERVAL_FINAL_30S: "2"
-        run: python scripts/fast_ofs_monitor.py
+        run: python scripts/fast_ofs_monitor_v2.py
 
       - name: Upload final monitor evidence
         if: always()
