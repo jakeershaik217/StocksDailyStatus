@@ -1,0 +1,21 @@
+{
+  "exchange": "NSE",
+  "interval": "day",
+  "lookback": 60,
+  "target_notional": "20000",
+  "product": "CNC",
+  "risk": {
+    "max_order_notional": "25000",
+    "max_position_notional": "50000",
+    "max_gross_exposure": "200000",
+    "max_orders_per_run": 5,
+    "require_market_hours": true
+  },
+  "strategies": [
+    {
+      "name": "sma_crossover",
+      "params": {"fast": 10, "slow": 30},
+      "symbols": ["INFY", "TCS", "HINDCOPPER"]
+    }
+  ]
+}

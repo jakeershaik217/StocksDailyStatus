@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+paper-ledger.json
+strategy-run.json
+strategy-run.md
+backtest.json
