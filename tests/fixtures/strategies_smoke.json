@@ -1,0 +1,10 @@
+{
+  "exchange": "NSE",
+  "interval": "day",
+  "lookback": 60,
+  "target_notional": "5000",
+  "risk": {"require_market_hours": false},
+  "strategies": [
+    {"name": "sma_crossover", "params": {"fast": 5, "slow": 15}, "symbols": ["DEMO"]}
+  ]
+}

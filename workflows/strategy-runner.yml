@@ -1,0 +1,118 @@
+name: Strategy Runner
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/strategy-runner.yml"
+      - "strategies/**"
+      - "trading/**"
+      - "scripts/run_strategies.py"
+      - "scripts/backtest_strategy.py"
+      - "strategies.json"
+      - "tests/**"
+  schedule:
+    # 14:45 IST on weekdays (09:15 UTC); Kite historical bars include the live day.
+    - cron: "15 9 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "paper uses a simulated ledger; live sends real Kite orders"
+        required: true
+        default: "paper"
+        type: choice
+        options:
+          - paper
+          - live
+      live_confirm:
+        description: "Type I_UNDERSTAND_REAL_MONEY to allow live mode"
+        required: false
+        default: ""
+        type: string
+      kill_switch:
+        description: "Set true to evaluate signals but block every order"
+        required: false
+        default: "false"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strategy-runner
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_strategies.py tests/test_trading.py
+      - name: Smoke-run paper runner on fixture bars
+        env:
+          TRADING_MODE: paper
+          STRATEGY_CONFIG: tests/fixtures/strategies_smoke.json
+          STRATEGY_FIXTURE_FILE: tests/fixtures/strategy_bars.json
+        run: python scripts/run_strategies.py
+      - name: Smoke-run backtest on fixture bars
+        env:
+          BACKTEST_SYMBOL: DEMO
+          STRATEGY_PARAMS: '{"fast": 5, "slow": 15}'
+          STRATEGY_FIXTURE_FILE: tests/fixtures/strategy_bars.json
+        run: python scripts/backtest_strategy.py
+
+  run:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: trading
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Restore paper ledger
+        uses: actions/cache/restore@v4
+        with:
+          path: paper-ledger.json
+          key: paper-ledger-${{ github.run_id }}
+          restore-keys: paper-ledger-
+
+      - name: Run strategies
+        env:
+          TRADING_MODE: ${{ inputs.mode || 'paper' }}
+          TRADING_LIVE_CONFIRM: ${{ inputs.live_confirm }}
+          TRADING_KILL_SWITCH: ${{ inputs.kill_switch || 'false' }}
+          STRATEGY_CONFIG: strategies.json
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4o-mini
+        run: python scripts/run_strategies.py
+
+      - name: Save paper ledger
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: paper-ledger.json
+          key: paper-ledger-${{ github.run_id }}
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-run-${{ github.run_number }}
+          path: |
+            strategy-run.json
+            strategy-run.md
+            paper-ledger.json
+          if-no-files-found: warn
